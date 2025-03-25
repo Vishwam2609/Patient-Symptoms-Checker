@@ -9,7 +9,7 @@ async function extractSymptoms(blob: Blob): Promise<string> {
   formData.append('file', blob, 'recording.wav');
 
   // Replace the URL below with your actual ngrok HTTPS URL.
-  const response = await fetch('https://abcd1234.ngrok.io/extract_symptoms', {
+  const response = await fetch('https://bbc6-34-223-90-89.ngrok-free.app/extract_symptoms', {
     method: 'POST',
     body: formData,
   });
@@ -65,11 +65,11 @@ function App() {
 
   // Callback when a follow-up recording is completed.
   const handleFollowUpRecordingComplete = (audioBlob: Blob) => {
-    setFollowUpRecordings(prev => {
+    setFollowUpRecordings((prev: Blob[]) => {
       const newRecordings = [...prev];
       newRecordings[followUpIndex] = audioBlob;
       return newRecordings;
-    });
+    });    
     const nextIndex = followUpIndex + 1;
     if (nextIndex < followUpQuestions.length) {
       setFollowUpIndex(nextIndex);

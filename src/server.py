@@ -3,11 +3,10 @@ import whisper
 import tempfile
 import requests
 import gc
-import os 
 from pyngrok import ngrok
 
 # Set your Ngrok auth token
-NGROK_AUTH_TOKEN = "YOUR AUTH TOKEN"
+NGROK_AUTH_TOKEN = "2sZL5k5FBMPppi3zC5xRRYuG5IP_6BiBZ5A9ee77WTxAfVWqa"
 ngrok.set_auth_token(NGROK_AUTH_TOKEN)
 
 app = Flask(__name__)
@@ -15,7 +14,7 @@ app = Flask(__name__)
 # Hugging Face model settings
 HF_MODEL = "ContactDoctor/Bio-Medical-Llama-3-2-1B-CoT-012025"
 HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")  # Instead of hardcoding the token
+HF_TOKEN = "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"
 
 def query_huggingface_api(prompt: str) -> str:
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
@@ -47,7 +46,11 @@ def extract_symptoms():
             return jsonify({"error": f"Model load failed: {str(e)}"}), 500
 
         result = model.transcribe(temp_audio.name)
-        transcript = result.get("text", "").strip()
+        transcript_raw = result.get("text", "")
+        if isinstance(transcript_raw, list):
+            transcript = " ".join(transcript_raw).strip()
+        else:
+            transcript = transcript_raw.strip()
         # Unload the model and free memory.
         del model
         gc.collect()
@@ -60,7 +63,8 @@ def extract_symptoms():
     return jsonify({"key_symptoms": key_symptoms})
 
 if __name__ == "__main__":
-    # Start ngrok tunnel
-    public_url = ngrok.connect(5000)
-    print(f"Public URL: {public_url}")
+    # Start an ngrok tunnel on port 5000
+    public_url = ngrok.connect("5000")
+    print("Public URL:", public_url)
+    # Run the Flask app so it listens on all interfaces
     app.run(host="0.0.0.0", port=5000)
