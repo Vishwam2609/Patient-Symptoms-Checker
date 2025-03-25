@@ -3,7 +3,7 @@ import whisper
 import tempfile
 import requests
 import gc
-# import os
+import os
 from pyngrok import ngrok
 
 # Set your Ngrok auth token
@@ -15,8 +15,7 @@ app = Flask(__name__)
 # Hugging Face model settings
 HF_MODEL = "ContactDoctor/Bio-Medical-Llama-3-2-1B-CoT-012025"
 HF_API_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-# HF_TOKEN = "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"
-HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")  # Instead of hardcoding the token
+HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN")  # Instead of hardcoding the token
 
 def query_huggingface_api(prompt: str) -> str:
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
