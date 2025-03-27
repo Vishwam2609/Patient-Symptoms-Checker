@@ -1,4 +1,3 @@
-// File: src/components/AudioRecorder.tsx
 import React, { useState, useRef } from 'react';
 
 interface AudioRecorderProps {

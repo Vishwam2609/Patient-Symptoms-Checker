@@ -1,16 +1,43 @@
-// File: src/App.tsx
 import React, { useState } from 'react';
 import { AudioRecorder } from './components/AudioRecorder';
 import { Button } from './components/ui/button';
 import { Mic, MessageSquare } from 'lucide-react';
 
-// Replace with your actual ngrok public URL provided by your backend
-const API_BASE_URL = 'https://<your-ngrok-url>';
+// Replace with your actual ngrok public URL printed by your backend.
+const API_BASE_URL = 'https://083a-3-141-107-28.ngrok-free.app';
+
+// Mapping from key symptom (in lowercase) to follow-up questions
+const followUpQuestionsMapping: { [key: string]: string[] } = {
+  fever: [
+    "When did you first notice your fever, and has the temperature been consistently high or fluctuating?",
+    "Are you experiencing any other symptoms alongside the fever, such as chills, sweating, or body aches?",
+    "Have you had any recent exposures—like travel, contact with someone ill, or changes in your daily environment—that might be contributing to your fever?"
+  ],
+  coughing: [
+    "When did your cough start, and is it persistent or does it come and go?",
+    "Is your cough dry, or are you producing any phlegm? If there is phlegm, what color is it?",
+    "Are you experiencing any additional respiratory symptoms, such as shortness of breath, wheezing, or chest tightness?"
+  ],
+  headache: [
+    "When did your headache begin, and how would you describe its intensity and duration?",
+    "Is the headache localized to one area (e.g., one side of the head) or is it more generalized?",
+    "Have you experienced other symptoms like nausea, sensitivity to light or sound, or visual disturbances alongside the headache?"
+  ],
+  "back pain": [
+    "When did your back pain start, and can you specify if it’s localized to a particular area (e.g., lower back, upper back)?",
+    "Does the pain worsen with certain movements or activities, or does it occur even at rest?",
+    "Have you recently engaged in activities (like heavy lifting or prolonged sitting) or experienced any injuries that might be contributing to the pain?"
+  ],
+  toothache: [
+    "When did you first notice your toothache, and is the pain constant or does it occur mainly during activities like chewing?",
+    "How would you describe the pain—is it sharp, throbbing, or dull—and does it radiate to your jaw or ear?",
+    "Have you experienced any additional dental issues, such as gum swelling, sensitivity to hot or cold foods, or a history of dental problems?"
+  ]
+};
 
 async function transcribeAudio(blob: Blob): Promise<string> {
   const formData = new FormData();
   formData.append('file', blob, 'recording.wav');
-
   const response = await fetch(`${API_BASE_URL}/transcribe`, {
     method: 'POST',
     body: formData,
@@ -38,14 +65,20 @@ async function extractSymptoms(transcript: string): Promise<string> {
 }
 
 function App() {
-  // App steps: 'initial' -> 'recording' -> 'review' -> 'followup'
-  const [step, setStep] = useState<'initial' | 'recording' | 'review' | 'followup'>('initial');
+  // Steps: initial → recording → review → followup → final
+  const [step, setStep] = useState<'initial' | 'recording' | 'review' | 'followup' | 'final'>('initial');
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [editedTranscript, setEditedTranscript] = useState<string>('');
-  const [keySymptoms, setKeySymptoms] = useState<string | null>(null);
+  // Store the extracted symptom internally (not shown)
+  const [extractedSymptom, setExtractedSymptom] = useState<string>('');
+  // Follow-up questions determined by extracted symptom and patient answers
+  const [followUpQuestions, setFollowUpQuestions] = useState<string[]>([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
+  const [followUpAnswers, setFollowUpAnswers] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // After recording, send audio for transcription
   const handleRecordingComplete = async (blob: Blob) => {
     setRecordedBlob(blob);
     setLoading(true);
@@ -55,74 +88,129 @@ function App() {
       setEditedTranscript(transcribedText);
       setStep('review');
     } catch (error: any) {
-      console.error(error);
+      console.error("Error in transcription:", error);
       alert("Transcription failed. Please try again.");
     }
     setLoading(false);
   };
 
+  // When the transcript is reviewed, extract the key symptom (internally) and set up follow-up questions.
   const handleExtractSymptoms = async () => {
     if (!editedTranscript) return;
     setLoading(true);
     try {
-      const extracted = await extractSymptoms(editedTranscript);
-      setKeySymptoms(extracted);
+      const symptom = await extractSymptoms(editedTranscript);
+      setExtractedSymptom(symptom);
+      // Determine follow-up questions based on the extracted symptom.
+      const symptomLower = symptom.toLowerCase();
+      let questions: string[] = [];
+      for (const key in followUpQuestionsMapping) {
+        if (symptomLower.includes(key)) {
+          questions = followUpQuestionsMapping[key];
+          break;
+        }
+      }
+      setFollowUpQuestions(questions);
+      setCurrentQuestionIndex(0);
+      setFollowUpAnswers([]);
       setStep('followup');
     } catch (error: any) {
-      console.error(error);
+      console.error("Error in symptom extraction:", error);
       alert("Symptom extraction failed. Please try again.");
     }
     setLoading(false);
   };
 
+  // Handle follow-up answer submission; require non-empty answer before moving on.
+  const handleNextFollowUp = () => {
+    const answer = followUpAnswers[currentQuestionIndex] || "";
+    if (!answer.trim()) {
+      alert("Please answer the question before proceeding.");
+      return;
+    }
+    const newAnswers = [...followUpAnswers];
+    newAnswers[currentQuestionIndex] = answer;
+    setFollowUpAnswers(newAnswers);
+    if (currentQuestionIndex + 1 < followUpQuestions.length) {
+      setCurrentQuestionIndex(currentQuestionIndex + 1);
+    } else {
+      setStep('final');
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-4xl mx-auto p-6">
-        {/* Initial page with mic icon remains unchanged */}
+    <div className="min-h-screen bg-gradient-to-r from-blue-50 to-gray-100">
+      <div className="max-w-3xl mx-auto p-6">
         {step === 'initial' && (
           <div className="text-center space-y-6">
             <div className="flex justify-center">
-              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center">
-                <Mic className="w-8 h-8 text-blue-600" />
+              <div className="w-20 h-20 bg-blue-200 rounded-full flex items-center justify-center shadow-lg">
+                <Mic className="w-10 h-10 text-blue-600" />
               </div>
             </div>
-            <h1 className="text-4xl font-bold text-gray-900">Patient Symptom Guide</h1>
-            <p className="text-lg text-gray-600">
-              Describe your symptoms using your voice and receive personalized guidance.
+            <h1 className="text-4xl font-extrabold text-gray-900">Patient Symptom Guide</h1>
+            <p className="text-lg text-gray-700">
+              Record your symptoms to receive personalized follow-up questions.
             </p>
-            <Button onClick={() => setStep('recording')} className="flex items-center gap-2">
-              <Mic className="w-4 h-4" /> Start Recording
+            <Button onClick={() => setStep('recording')} className="mt-4 px-6 py-3 bg-blue-600 text-white rounded-lg shadow hover:bg-blue-700">
+              <Mic className="w-5 h-5 mr-2" /> Start Recording
             </Button>
           </div>
         )}
 
         {step === 'recording' && (
-          <div className="space-y-6">
-            <h2 className="text-2xl font-semibold text-gray-900">Record Your Symptoms</h2>
+          <div className="space-y-6 text-center">
+            <h2 className="text-3xl font-semibold text-gray-900">Record Your Symptoms</h2>
             <AudioRecorder onRecordingComplete={handleRecordingComplete} />
-            {loading && <p className="mt-4 text-center text-gray-600">Transcribing...</p>}
+            {loading && <p className="mt-4 text-gray-600">Transcribing...</p>}
           </div>
         )}
 
         {step === 'review' && (
           <div className="space-y-6">
             <h2 className="text-2xl font-semibold text-gray-900">Review Your Transcription</h2>
+            <p className="text-gray-700">Please review and edit the transcript if needed before proceeding.</p>
             <textarea
-              className="w-full border p-2 rounded-md"
+              className="w-full p-3 border rounded-md shadow-sm"
               rows={6}
               value={editedTranscript}
               onChange={(e) => setEditedTranscript(e.target.value)}
             />
-            <Button onClick={handleExtractSymptoms} disabled={loading} className="mt-4 flex items-center gap-2">
-              <MessageSquare className="w-4 h-4" /> Extract Key Symptoms
+            <Button onClick={handleExtractSymptoms} disabled={loading} className="mt-4 px-6 py-3 bg-green-600 text-white rounded-lg shadow hover:bg-green-700">
+              Extract Key Symptom
             </Button>
           </div>
         )}
 
-        {step === 'followup' && (
+        {step === 'followup' && followUpQuestions.length > 0 && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-semibold text-gray-900">
+              Follow-Up Question {currentQuestionIndex + 1} of {followUpQuestions.length}
+            </h2>
+            <p className="text-lg text-gray-700">{followUpQuestions[currentQuestionIndex]}</p>
+            <textarea
+              className="w-full p-3 border rounded-md shadow-sm mt-2"
+              rows={3}
+              placeholder="Your answer..."
+              value={followUpAnswers[currentQuestionIndex] || ""}
+              onChange={(e) => {
+                const newAnswers = [...followUpAnswers];
+                newAnswers[currentQuestionIndex] = e.target.value;
+                setFollowUpAnswers(newAnswers);
+              }}
+            />
+            <Button onClick={handleNextFollowUp} className="mt-4 px-6 py-3 bg-purple-600 text-white rounded-lg shadow hover:bg-purple-700">
+              Next
+            </Button>
+          </div>
+        )}
+
+        {step === 'final' && (
           <div className="space-y-6 text-center">
-            <h2 className="text-2xl font-semibold text-gray-900">Extracted Key Symptoms</h2>
-            <p className="text-lg">{keySymptoms}</p>
+            <h2 className="text-3xl font-bold text-gray-900">Thank You!</h2>
+            <p className="text-lg text-gray-700">
+              Thank you for providing your information. A medical professional will review your responses.
+            </p>
           </div>
         )}
       </div>
