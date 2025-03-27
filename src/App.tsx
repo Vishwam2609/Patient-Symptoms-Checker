@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AudioRecorder } from './components/AudioRecorder';
 import { Button } from './components/ui/button';
 import { Mic, MessageSquare } from 'lucide-react';
@@ -61,7 +61,25 @@ async function extractSymptoms(transcript: string): Promise<string> {
     throw new Error(errorData.error || 'Symptom extraction failed');
   }
   const data = await response.json();
-  return data.key_symptom;
+  return data.key_symptom; // Note: This is used internally only.
+}
+
+async function generateGuidelines(
+  transcript: string,
+  key_symptom: string,
+  follow_up: { question: string; answer: string }[]
+): Promise<string> {
+  const response = await fetch(`${API_BASE_URL}/generate_guidelines`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transcript, key_symptom, follow_up }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.error || 'Guideline generation failed');
+  }
+  const data = await response.json();
+  return data.guidelines;
 }
 
 function App() {
@@ -70,15 +88,14 @@ function App() {
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [editedTranscript, setEditedTranscript] = useState<string>('');
-  // Store the extracted symptom internally (not shown)
-  const [extractedSymptom, setExtractedSymptom] = useState<string>('');
-  // Follow-up questions determined by extracted symptom and patient answers
+  const [extractedSymptom, setExtractedSymptom] = useState<string>(''); // used internally
   const [followUpQuestions, setFollowUpQuestions] = useState<string[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [followUpAnswers, setFollowUpAnswers] = useState<string[]>([]);
+  const [guidelines, setGuidelines] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
-  // After recording, send audio for transcription
+  // After recording, transcribe audio.
   const handleRecordingComplete = async (blob: Blob) => {
     setRecordedBlob(blob);
     setLoading(true);
@@ -94,14 +111,14 @@ function App() {
     setLoading(false);
   };
 
-  // When the transcript is reviewed, extract the key symptom (internally) and set up follow-up questions.
+  // When transcript is reviewed, extract key symptom internally and set up follow-up questions.
   const handleExtractSymptoms = async () => {
     if (!editedTranscript) return;
     setLoading(true);
     try {
       const symptom = await extractSymptoms(editedTranscript);
       setExtractedSymptom(symptom);
-      // Determine follow-up questions based on the extracted symptom.
+      // Determine follow-up questions from mapping.
       const symptomLower = symptom.toLowerCase();
       let questions: string[] = [];
       for (const key in followUpQuestionsMapping) {
@@ -121,22 +138,42 @@ function App() {
     setLoading(false);
   };
 
-  // Handle follow-up answer submission; require non-empty answer before moving on.
+  // Handle follow-up question answer and ensure non-empty answer before proceeding.
   const handleNextFollowUp = () => {
     const answer = followUpAnswers[currentQuestionIndex] || "";
     if (!answer.trim()) {
       alert("Please answer the question before proceeding.");
       return;
     }
-    const newAnswers = [...followUpAnswers];
-    newAnswers[currentQuestionIndex] = answer;
-    setFollowUpAnswers(newAnswers);
     if (currentQuestionIndex + 1 < followUpQuestions.length) {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
     } else {
       setStep('final');
     }
   };
+
+  // When final step is reached, generate guidelines using transcript, key symptom, and follow-up Q&A.
+  useEffect(() => {
+    if (step === "final") {
+      const generate = async () => {
+        setLoading(true);
+        try {
+          // Prepare follow-up Q&A as an array of objects.
+          const followUp = followUpQuestions.map((q, i) => ({
+            question: q,
+            answer: followUpAnswers[i] || ""
+          }));
+          const guidelinesResult = await generateGuidelines(editedTranscript, extractedSymptom, followUp);
+          setGuidelines(guidelinesResult);
+        } catch (error: any) {
+          console.error("Error in guideline generation:", error);
+          alert("Guideline generation failed. Please try again.");
+        }
+        setLoading(false);
+      };
+      generate();
+    }
+  }, [step, editedTranscript, extractedSymptom, followUpQuestions, followUpAnswers]);
 
   return (
     <div className="min-h-screen bg-gradient-to-r from-blue-50 to-gray-100">
@@ -199,7 +236,10 @@ function App() {
                 setFollowUpAnswers(newAnswers);
               }}
             />
-            <Button onClick={handleNextFollowUp} className="mt-4 px-6 py-3 bg-purple-600 text-white rounded-lg shadow hover:bg-purple-700">
+            <Button
+              onClick={handleNextFollowUp}
+              className="mt-4 px-6 py-3 bg-purple-600 text-white rounded-lg shadow hover:bg-purple-700"
+            >
               Next
             </Button>
           </div>
@@ -207,10 +247,14 @@ function App() {
 
         {step === 'final' && (
           <div className="space-y-6 text-center">
-            <h2 className="text-3xl font-bold text-gray-900">Thank You!</h2>
-            <p className="text-lg text-gray-700">
-              Thank you for providing your information. A medical professional will review your responses.
-            </p>
+            <h2 className="text-3xl font-bold text-gray-900">Guidelines</h2>
+            {loading ? (
+              <p className="text-lg text-gray-600">Generating guidelines...</p>
+            ) : (
+              <div className="bg-white p-4 rounded shadow">
+                <pre className="whitespace-pre-wrap text-lg text-gray-800">{guidelines}</pre>
+              </div>
+            )}
           </div>
         )}
       </div>
