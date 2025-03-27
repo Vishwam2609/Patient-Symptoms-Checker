@@ -1,8 +1,7 @@
 # --- Begin Monkey Patches (must be at the very top) ---
-import torch
 import transformers
+import torch
 
-# Patch torch.compiler if not available (needed for Transformers integrations)
 if not hasattr(torch, "compiler"):
     class DummyCompiler:
         @staticmethod
@@ -12,7 +11,6 @@ if not hasattr(torch, "compiler"):
             return decorator
     torch.compiler = DummyCompiler()
 
-# Patch PreTrainedModel.load_state_dict to remove the unexpected "assign" argument
 old_load_state_dict = transformers.modeling_utils.PreTrainedModel.load_state_dict
 
 def new_load_state_dict(self, state_dict, strict=True, **kwargs):
@@ -37,12 +35,12 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 # Use GPU if available.
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Disable flex attention and set a dedicated cache directory.
+# Disable flex attention and set cache directory.
 os.environ["TRANSFORMERS_NO_FLEX_ATTENTION"] = "1"
 CACHE_DIR = "/tmp/transformers_cache"
 os.environ["TRANSFORMERS_CACHE"] = CACHE_DIR
 
-# For static extraction of key symptom via keyword matching.
+# Static extraction for key symptom.
 def static_extract_key_symptom(transcript: str) -> str:
     symptoms = {
         "fever": ["fever", "temperature", "hot"],
@@ -56,7 +54,7 @@ def static_extract_key_symptom(transcript: str) -> str:
         for keyword in keywords:
             if keyword in transcript_lower:
                 return symptom
-    return transcript  # Fallback if no keyword is found
+    return transcript
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -64,11 +62,10 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 CORS(app)
 
-# Set your ngrok auth token.
 NGROK_AUTH_TOKEN = "2sZL5k5FBMPppi3zC5xRRYuG5IP_6BiBZ5A9ee77WTxAfVWqa"
 ngrok.set_auth_token(NGROK_AUTH_TOKEN)
 
-# For guideline generation using LLM.
+# LLMHandler for guideline generation.
 class LLMHandler:
     """Handles interactions with the LLM for generating guidelines."""
     def __init__(self):
@@ -94,7 +91,7 @@ class LLMHandler:
                     LLM_MODEL_NAME,
                     use_auth_token=HUGGING_FACE_TOKEN,
                     force_download=True,
-                    use_fast=False,              # Force slow tokenizer
+                    use_fast=False,
                     trust_remote_code=True,
                     cache_dir=CACHE_DIR
                 )
@@ -145,11 +142,11 @@ class LLMHandler:
             [f"Q: {item['question']}\nA: {item['answer']}" for item in follow_up]
         )
         prompt = (
-            "You are a caring doctor. Based on the following patient description, key symptom, and follow-up responses, provide three concise home care guidelines for the patient.\n"
+            "You are a caring doctor. Based on the following patient description, key symptom, and follow-up responses, provide exactly three concise home care guidelines for the patient.\n"
+            "Output only the three guidelines, each on a separate line starting with '- ', with no additional text.\n\n"
             f"Patient Description: {transcript}\n"
             f"Key Symptom: {key_symptom}\n"
             f"Follow-Up Responses:\n{follow_up_text}\n"
-            "Provide exactly three guidelines, each starting with '- '."
         )
         return self.generate_text(prompt, max_new_tokens=300, num_beams=5, temperature=0.7, repetition_penalty=1.2)
 

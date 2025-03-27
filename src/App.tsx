@@ -3,10 +3,10 @@ import { AudioRecorder } from './components/AudioRecorder';
 import { Button } from './components/ui/button';
 import { Mic, MessageSquare } from 'lucide-react';
 
-// Replace with your actual ngrok public URL printed by your backend.
-const API_BASE_URL = 'https://083a-3-141-107-28.ngrok-free.app';
+// Replace with your actual ngrok public URL from your backend.
+const API_BASE_URL = 'https://YOUR-NGROK-PUBLIC-URL';
 
-// Mapping from key symptom (in lowercase) to follow-up questions
+// Mapping from key symptom (in lowercase) to follow-up questions.
 const followUpQuestionsMapping: { [key: string]: string[] } = {
   fever: [
     "When did you first notice your fever, and has the temperature been consistently high or fluctuating?",
@@ -20,18 +20,18 @@ const followUpQuestionsMapping: { [key: string]: string[] } = {
   ],
   headache: [
     "When did your headache begin, and how would you describe its intensity and duration?",
-    "Is the headache localized to one area (e.g., one side of the head) or is it more generalized?",
+    "Is the headache localized to one area or is it more generalized?",
     "Have you experienced other symptoms like nausea, sensitivity to light or sound, or visual disturbances alongside the headache?"
   ],
   "back pain": [
-    "When did your back pain start, and can you specify if it’s localized to a particular area (e.g., lower back, upper back)?",
-    "Does the pain worsen with certain movements or activities, or does it occur even at rest?",
-    "Have you recently engaged in activities (like heavy lifting or prolonged sitting) or experienced any injuries that might be contributing to the pain?"
+    "When did your back pain start, and is it localized to a specific area (e.g., lower back)?",
+    "Does the pain worsen with movement or remain constant?",
+    "Have you recently engaged in activities that might have strained your back?"
   ],
   toothache: [
-    "When did you first notice your toothache, and is the pain constant or does it occur mainly during activities like chewing?",
-    "How would you describe the pain—is it sharp, throbbing, or dull—and does it radiate to your jaw or ear?",
-    "Have you experienced any additional dental issues, such as gum swelling, sensitivity to hot or cold foods, or a history of dental problems?"
+    "When did you first notice your toothache, and is the pain constant or intermittent?",
+    "How would you describe the pain, and does it radiate to nearby areas?",
+    "Have you experienced any other dental symptoms like gum swelling or sensitivity?"
   ]
 };
 
@@ -61,7 +61,7 @@ async function extractSymptoms(transcript: string): Promise<string> {
     throw new Error(errorData.error || 'Symptom extraction failed');
   }
   const data = await response.json();
-  return data.key_symptom;
+  return data.key_symptom; // Used internally only.
 }
 
 async function generateGuidelines(
@@ -83,22 +83,18 @@ async function generateGuidelines(
 }
 
 function App() {
-  // Steps: initial → recording → review → followup → final
   const [step, setStep] = useState<'initial' | 'recording' | 'review' | 'followup' | 'final'>('initial');
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [editedTranscript, setEditedTranscript] = useState<string>('');
-  // Internal key symptom extracted from the transcript
-  const [extractedSymptom, setExtractedSymptom] = useState<string>('');
-  // Follow-up questions and answers
+  const [extractedSymptom, setExtractedSymptom] = useState<string>(''); // Internal only
   const [followUpQuestions, setFollowUpQuestions] = useState<string[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [followUpAnswers, setFollowUpAnswers] = useState<string[]>([]);
-  // Generated guidelines
   const [guidelines, setGuidelines] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
-  // After recording, send audio for transcription.
+  // Recording complete: get transcript.
   const handleRecordingComplete = async (blob: Blob) => {
     setRecordedBlob(blob);
     setLoading(true);
@@ -114,14 +110,14 @@ function App() {
     setLoading(false);
   };
 
-  // After reviewing, extract key symptom internally and set up follow-up questions.
+  // After reviewing, extract key symptom internally and set follow-up questions.
   const handleExtractSymptoms = async () => {
     if (!editedTranscript) return;
     setLoading(true);
     try {
       const symptom = await extractSymptoms(editedTranscript);
       setExtractedSymptom(symptom);
-      // Determine follow-up questions based on the extracted symptom.
+      // Lookup follow-up questions based on the extracted symptom.
       const symptomLower = symptom.toLowerCase();
       let questions: string[] = [];
       for (const key in followUpQuestionsMapping) {
@@ -141,7 +137,7 @@ function App() {
     setLoading(false);
   };
 
-  // Handle follow-up question answer submission.
+  // For each follow-up question, ensure an answer is provided before moving on.
   const handleNextFollowUp = () => {
     const answer = followUpAnswers[currentQuestionIndex] || "";
     if (!answer.trim()) {
@@ -254,6 +250,7 @@ function App() {
               <p className="text-lg text-gray-600">Generating guidelines...</p>
             ) : (
               <div className="bg-white p-4 rounded shadow">
+                {/* Only display the guidelines */}
                 <pre className="whitespace-pre-wrap text-lg text-gray-800">{guidelines}</pre>
               </div>
             )}
