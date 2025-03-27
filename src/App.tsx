@@ -61,7 +61,7 @@ async function extractSymptoms(transcript: string): Promise<string> {
     throw new Error(errorData.error || 'Symptom extraction failed');
   }
   const data = await response.json();
-  return data.key_symptom; // Note: This is used internally only.
+  return data.key_symptom;
 }
 
 async function generateGuidelines(
@@ -88,14 +88,17 @@ function App() {
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [editedTranscript, setEditedTranscript] = useState<string>('');
-  const [extractedSymptom, setExtractedSymptom] = useState<string>(''); // used internally
+  // Internal key symptom extracted from the transcript
+  const [extractedSymptom, setExtractedSymptom] = useState<string>('');
+  // Follow-up questions and answers
   const [followUpQuestions, setFollowUpQuestions] = useState<string[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [followUpAnswers, setFollowUpAnswers] = useState<string[]>([]);
+  // Generated guidelines
   const [guidelines, setGuidelines] = useState<string>('');
   const [loading, setLoading] = useState(false);
 
-  // After recording, transcribe audio.
+  // After recording, send audio for transcription.
   const handleRecordingComplete = async (blob: Blob) => {
     setRecordedBlob(blob);
     setLoading(true);
@@ -105,20 +108,20 @@ function App() {
       setEditedTranscript(transcribedText);
       setStep('review');
     } catch (error: any) {
-      console.error("Error in transcription:", error);
+      console.error("Transcription error:", error);
       alert("Transcription failed. Please try again.");
     }
     setLoading(false);
   };
 
-  // When transcript is reviewed, extract key symptom internally and set up follow-up questions.
+  // After reviewing, extract key symptom internally and set up follow-up questions.
   const handleExtractSymptoms = async () => {
     if (!editedTranscript) return;
     setLoading(true);
     try {
       const symptom = await extractSymptoms(editedTranscript);
       setExtractedSymptom(symptom);
-      // Determine follow-up questions from mapping.
+      // Determine follow-up questions based on the extracted symptom.
       const symptomLower = symptom.toLowerCase();
       let questions: string[] = [];
       for (const key in followUpQuestionsMapping) {
@@ -132,13 +135,13 @@ function App() {
       setFollowUpAnswers([]);
       setStep('followup');
     } catch (error: any) {
-      console.error("Error in symptom extraction:", error);
+      console.error("Symptom extraction error:", error);
       alert("Symptom extraction failed. Please try again.");
     }
     setLoading(false);
   };
 
-  // Handle follow-up question answer and ensure non-empty answer before proceeding.
+  // Handle follow-up question answer submission.
   const handleNextFollowUp = () => {
     const answer = followUpAnswers[currentQuestionIndex] || "";
     if (!answer.trim()) {
@@ -152,21 +155,20 @@ function App() {
     }
   };
 
-  // When final step is reached, generate guidelines using transcript, key symptom, and follow-up Q&A.
+  // When final step is reached, generate guidelines.
   useEffect(() => {
     if (step === "final") {
       const generate = async () => {
         setLoading(true);
         try {
-          // Prepare follow-up Q&A as an array of objects.
-          const followUp = followUpQuestions.map((q, i) => ({
+          const followUpData = followUpQuestions.map((q, i) => ({
             question: q,
             answer: followUpAnswers[i] || ""
           }));
-          const guidelinesResult = await generateGuidelines(editedTranscript, extractedSymptom, followUp);
+          const guidelinesResult = await generateGuidelines(editedTranscript, extractedSymptom, followUpData);
           setGuidelines(guidelinesResult);
         } catch (error: any) {
-          console.error("Error in guideline generation:", error);
+          console.error("Guideline generation error:", error);
           alert("Guideline generation failed. Please try again.");
         }
         setLoading(false);
@@ -247,7 +249,7 @@ function App() {
 
         {step === 'final' && (
           <div className="space-y-6 text-center">
-            <h2 className="text-3xl font-bold text-gray-900">Guidelines</h2>
+            <h2 className="text-3xl font-bold text-gray-900">Home Care Guidelines</h2>
             {loading ? (
               <p className="text-lg text-gray-600">Generating guidelines...</p>
             ) : (

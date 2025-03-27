@@ -1,5 +1,8 @@
-# --- Begin Monkey-Patch (Must be at the very top) ---
+# --- Begin Monkey Patches (must be at the very top) ---
 import torch
+import transformers
+
+# Patch torch.compiler if not available (needed for Transformers integrations)
 if not hasattr(torch, "compiler"):
     class DummyCompiler:
         @staticmethod
@@ -8,7 +11,17 @@ if not hasattr(torch, "compiler"):
                 return func
             return decorator
     torch.compiler = DummyCompiler()
-# --- End Monkey-Patch ---
+
+# Patch PreTrainedModel.load_state_dict to remove the unexpected "assign" argument
+old_load_state_dict = transformers.modeling_utils.PreTrainedModel.load_state_dict
+
+def new_load_state_dict(self, state_dict, strict=True, **kwargs):
+    if "assign" in kwargs:
+        del kwargs["assign"]
+    return old_load_state_dict(self, state_dict, strict=strict, **kwargs)
+
+transformers.modeling_utils.PreTrainedModel.load_state_dict = new_load_state_dict
+# --- End Monkey Patches ---
 
 import os
 import logging
@@ -21,9 +34,11 @@ from pyngrok import ngrok
 import whisper
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
-# Disable flex attention
+# Use GPU if available.
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Disable flex attention and set a dedicated cache directory.
 os.environ["TRANSFORMERS_NO_FLEX_ATTENTION"] = "1"
-# Use a dedicated cache directory
 CACHE_DIR = "/tmp/transformers_cache"
 os.environ["TRANSFORMERS_CACHE"] = CACHE_DIR
 
@@ -41,20 +56,17 @@ def static_extract_key_symptom(transcript: str) -> str:
         for keyword in keywords:
             if keyword in transcript_lower:
                 return symptom
-    return transcript  # Fallback if no keyword found
+    return transcript  # Fallback if no keyword is found
 
-# Logging configuration
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 CORS(app)
 
-# Set ngrok auth token
+# Set your ngrok auth token.
 NGROK_AUTH_TOKEN = "2sZL5k5FBMPppi3zC5xRRYuG5IP_6BiBZ5A9ee77WTxAfVWqa"
 ngrok.set_auth_token(NGROK_AUTH_TOKEN)
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # For guideline generation using LLM.
 class LLMHandler:
@@ -76,14 +88,13 @@ class LLMHandler:
                 logger.info("Clearing model cache before loading LLM for guidelines...")
                 self.clear_model_cache()
                 logger.info("Loading LLM model for guidelines...")
-                # Load environment variables for model and token
                 HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN", "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")
                 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "ContactDoctor/Bio-Medical-Llama-3-2-1B-CoT-012025")
                 self.tokenizer = AutoTokenizer.from_pretrained(
                     LLM_MODEL_NAME,
                     use_auth_token=HUGGING_FACE_TOKEN,
                     force_download=True,
-                    use_fast=False,
+                    use_fast=False,              # Force slow tokenizer
                     trust_remote_code=True,
                     cache_dir=CACHE_DIR
                 )
@@ -124,9 +135,7 @@ class LLMHandler:
                 generated_text = result[0].get('generated_text', "")
             else:
                 generated_text = str(result[0]) if result else ""
-            generated_text = str(generated_text) if generated_text is not None else ""
-            logger.info("Text generation complete.")
-            return generated_text
+            return generated_text if generated_text is not None else ""
         except Exception as e:
             logger.error("LLM generation error", exc_info=True)
             return ""
@@ -195,7 +204,7 @@ def extract_symptoms():
         return jsonify({"error": f"Static extraction error: {str(e)}"}), 500
 
     logger.info(f"Extracted key symptom (internal): '{key_symptom}'")
-    # Return key symptom internally; the frontend will not show it.
+    # Return key symptom internally; frontend will not display it.
     return jsonify({"key_symptom": key_symptom})
 
 @app.route("/generate_guidelines", methods=["POST"])
@@ -206,7 +215,7 @@ def generate_guidelines():
 
     transcript = data["transcript"].strip()
     key_symptom = data["key_symptom"].strip()
-    follow_up = data["follow_up"]  # Expecting a list of objects with 'question' and 'answer'
+    follow_up = data["follow_up"]  # Expect a list of objects with 'question' and 'answer'
     for item in follow_up:
         if not item.get("answer", "").strip():
             return jsonify({"error": "All follow-up questions must be answered."}), 400
