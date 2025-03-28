@@ -1,13 +1,16 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 interface AudioRecorderProps {
   onRecordingComplete: (audioBlob: Blob) => void;
+  autoStart?: boolean;
 }
 
-export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplete }) => {
+export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplete, autoStart = false }) => {
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   const startRecording = async () => {
     try {
@@ -18,11 +21,19 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
         audioChunksRef.current.push(event.data);
       };
       mediaRecorderRef.current.onstop = () => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          setRecordingTime(0);
+        }
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
         onRecordingComplete(audioBlob);
       };
       mediaRecorderRef.current.start();
       setIsRecording(true);
+      // Start a timer to display recording time.
+      timerRef.current = setInterval(() => {
+        setRecordingTime((prev) => prev + 1);
+      }, 1000);
     } catch (error) {
       console.error("Error accessing microphone:", error);
       alert("We couldn't access your microphone. Please check your permissions and try again.");
@@ -36,22 +47,38 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
     }
   };
 
+  useEffect(() => {
+    if (autoStart) {
+      startRecording();
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [autoStart]);
+
   return (
-    <div className="text-center">
+    <div className="flex flex-col items-center">
+      {isRecording && (
+        <div className="mb-4 text-red-600 font-semibold animate-pulse">
+          Recording... {recordingTime}s
+        </div>
+      )}
       {isRecording ? (
         <button
           onClick={stopRecording}
-          className="px-4 py-2 text-white bg-red-500 rounded-lg shadow hover:bg-red-600 transition-colors"
+          className="px-6 py-3 bg-red-500 text-white rounded-full shadow-lg hover:bg-red-600 transition-all duration-200"
         >
           Stop Recording
         </button>
       ) : (
-        <button
-          onClick={startRecording}
-          className="px-4 py-2 text-white bg-blue-500 rounded-lg shadow hover:bg-blue-600 transition-colors"
-        >
-          Start Recording
-        </button>
+        !autoStart && (
+          <button
+            onClick={startRecording}
+            className="px-6 py-3 bg-blue-500 text-white rounded-full shadow-lg hover:bg-blue-600 transition-all duration-200"
+          >
+            Start Recording
+          </button>
+        )
       )}
     </div>
   );

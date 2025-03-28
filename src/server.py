@@ -27,11 +27,15 @@ import gc
 import tempfile
 import shutil
 import re
-from flask import Flask, request, jsonify
+import base64
+import io
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from pyngrok import ngrok
 import whisper
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from gtts import gTTS
+import torch
 
 # Use GPU if available.
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -124,21 +128,12 @@ class LLMHandler:
             logger.error("LLM generation error", exc_info=True)
             return ""
 
-    def extract_key_symptom(self, transcript: str) -> str:
-        prompt = (
-            "You are a caring doctor. Based on the patient description below, extract the key symptom described by the patient in one concise word or short phrase. "
-            "Output only the key symptom without any additional text.\n\n"
-            f"Patient Description: {transcript}\n"
-        )
-        return self.generate_text(prompt, max_new_tokens=20, num_beams=3, temperature=0.7, repetition_penalty=1.2)
-
     def generate_guidelines(self, transcript: str, key_symptom: str, follow_up: list) -> str:
         """
-        Generates concise, patient-friendly home care guidelines using the full conversation context.
-        The guidelines are written in plain language for a patient with limited medical knowledge,
-        as if the doctor is continuing the conversation directly.
+        Generates a Personalized Home Care Plan using the full conversation context.
+        It considers the patient's description, key symptom, and follow-up Q&A,
+        and returns a complete, clear set of home care guidelines.
         """
-        # Build the conversation context from the transcript, key symptom, and follow-up Q&A.
         follow_up_text = "\n".join(
             [f"Q: {item['question']}\nA: {item['answer']}" for item in follow_up]
         )
@@ -149,38 +144,38 @@ class LLMHandler:
             f"Follow-up Q&A:\n{follow_up_text}\n"
         )
 
-        # Construct a simple, patient-friendly prompt.
         prompt = (
             "You are a caring doctor speaking directly to a patient with limited medical knowledge. "
-            "Based on the conversation below, please give very simple, easy-to-follow home care guidelines for a headache. "
-            "Keep your language basic and friendly so that the patient clearly understands what to do at home. "
-            "Respond in one clear, complete, and concise paragraph, as if you are continuing your conversation with the patient.\n\n"
+            "Based on the conversation below, please provide a Personalized Home Care Plan. "
+            "Ensure that your advice is clear, actionable, and written in plain language so that the patient can easily follow it at home. "
+            "Respond in one complete and concise paragraph, as if you are continuing your conversation with the patient.\n\n"
             f"{detailed_context}\n\n"
-            "Answer:"
+            "Your Personalized Home Care Plan:"
         )
 
-        # Attempt to generate a complete response up to 10 times.
         for _ in range(10):
             result = self.generate_text(
                 prompt,
-                max_new_tokens=300,   # Increased token limit to allow more complete output.
+                max_new_tokens=300,
                 num_beams=5,
                 temperature=0.5,
                 repetition_penalty=1.0,
                 early_stopping=True
             )
-            # Remove any echoed prompt text by splitting on "Answer:"
-            if "Answer:" in result:
-                result = result.split("Answer:")[-1].strip()
-            # Collapse whitespace/newlines into a single paragraph.
+            if "Your Personalized Home Care Plan:" in result:
+                result = result.split("Your Personalized Home Care Plan:")[-1].strip()
             paragraph = " ".join(result.split())
-            # Check if the paragraph is sufficiently long (e.g., at least 30 words).
-            if paragraph and len(paragraph.split()) >= 30:
+            words = paragraph.split()
+            if len(words) >= 30:
+                if paragraph[-1] not in ".!?":
+                    paragraph += "."
                 return paragraph
 
         return "No valid guidelines generated."
 
 llm_handler = LLMHandler()
+
+import re
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
@@ -191,21 +186,30 @@ def transcribe():
     with tempfile.NamedTemporaryFile(suffix=".wav") as temp_audio:
         audio_file.save(temp_audio.name)
         try:
-            model = whisper.load_model("small", device=DEVICE)
+            # Use the English-only model for improved accuracy.
+            model = whisper.load_model("small.en", device=DEVICE)
         except Exception as e:
             logger.error("Whisper model load failed", exc_info=True)
             return jsonify({"error": f"Model load failed: {str(e)}"}), 500
 
         try:
-            result = model.transcribe(temp_audio.name)
+            # Use fp16=False for stability if needed.
+            result = model.transcribe(temp_audio.name, fp16=False)
             logger.info(f"Raw transcription result: {result}")
         except Exception as e:
             logger.error("Transcription failed", exc_info=True)
             return jsonify({"error": f"Transcription failed: {str(e)}"}), 500
 
         transcript_raw = result.get("text", "")
-        transcript = transcript_raw.strip() if not isinstance(transcript_raw, list) else " ".join(transcript_raw).strip()
-        logger.info(f"Transcript generated: '{transcript}'")
+        transcript = (transcript_raw.strip() 
+                      if not isinstance(transcript_raw, list) 
+                      else " ".join(transcript_raw).strip())
+
+        # Enhance the transcript: collapse multiple spaces and remove unusual characters.
+        transcript = re.sub(r'\s+', ' ', transcript)         # Collapse multiple spaces.
+        transcript = re.sub(r'[^\w\s.,!?]', '', transcript)    # Remove non-standard characters.
+
+        logger.info(f"Processed transcript: '{transcript}'")
         if not transcript:
             return jsonify({"error": "No transcript was generated. Please ensure the audio is clear and ffmpeg is installed."}), 500
 
@@ -225,7 +229,14 @@ def extract_symptoms():
         return jsonify({"error": "The provided transcript is empty."}), 400
 
     try:
-        key_symptom = llm_handler.extract_key_symptom(transcript)
+        key_symptom = llm_handler.generate_text(
+            "You are a caring doctor. Based on the following patient description, extract the key symptom in one short word or phrase.\n\n"
+            f"Patient Description: {transcript}\n\n"
+            "Answer:", 
+            max_new_tokens=20, num_beams=3, temperature=0.7, repetition_penalty=1.2
+        )
+        if "Answer:" in key_symptom:
+            key_symptom = key_symptom.split("Answer:")[-1].strip()
     except Exception as e:
         logger.error("Key symptom extraction error", exc_info=True)
         return jsonify({"error": f"Key symptom extraction error: {str(e)}"}), 500
@@ -254,7 +265,20 @@ def generate_guidelines():
         return jsonify({"error": f"Guideline generation error: {str(e)}"}), 500
 
     logger.info(f"Generated guidelines: '{guidelines_text}'")
-    return jsonify({"guidelines": guidelines_text})
+    
+    # Convert the guidelines text to speech using gTTS.
+    try:
+        tts = gTTS(text=guidelines_text, lang='en')
+        audio_io = io.BytesIO()
+        tts.write_to_fp(audio_io)
+        audio_io.seek(0)
+        audio_base64 = base64.b64encode(audio_io.read()).decode('utf-8')
+        audio_data_url = f"data:audio/mp3;base64,{audio_base64}"
+    except Exception as e:
+        logger.error("TTS conversion error", exc_info=True)
+        audio_data_url = ""
+
+    return jsonify({"guidelines": guidelines_text, "audio": audio_data_url})
 
 if __name__ == "__main__":
     try:

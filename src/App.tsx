@@ -3,10 +3,8 @@ import { AudioRecorder } from './components/AudioRecorder';
 import { Button } from './components/ui/button';
 import { Mic } from 'lucide-react';
 
-// Replace with your actual ngrok public URL from your backend.
 const API_BASE_URL = 'https://8341-100-27-249-117.ngrok-free.app';
 
-// Mapping from key symptom (in lowercase) to follow-up questions.
 const followUpQuestionsMapping: { [key: string]: string[] } = {
   fever: [
     "When did you first notice your fever, and has your temperature been consistently high or fluctuating?",
@@ -23,10 +21,10 @@ const followUpQuestionsMapping: { [key: string]: string[] } = {
     "Is the headache concentrated in one area or more generalized?",
     "Are you experiencing nausea, sensitivity to light or sound, or any visual disturbances?"
   ],
-  "back pain": [
-    "When did your back pain start, and is it in a specific area (e.g., lower back)?",
+  backpain: [
+    "When did your backpain start, and is it in a specific area such as your lower back?",
     "Does the pain get worse with movement or remain constant?",
-    "Have you done any strenuous activities recently that might have strained your back?"
+    "Have you engaged in any strenuous activities recently that might have strained your backpain?"
   ],
   toothache: [
     "When did your toothache begin, and is the pain constant or does it come and go?",
@@ -35,6 +33,20 @@ const followUpQuestionsMapping: { [key: string]: string[] } = {
   ]
 };
 
+/* ---------------- Speech Synthesis Tone Helper ---------------- */
+const createUtterance = (text: string): SpeechSynthesisUtterance => {
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 0.9;
+  utterance.pitch = 1.0;
+  utterance.volume = 1.0;
+  const voices = speechSynthesis.getVoices();
+  if (voices.length) {
+    utterance.voice = voices.find(voice => voice.lang.startsWith('en')) || voices[0];
+  }
+  return utterance;
+};
+
+/* ---------------- API Functions ---------------- */
 async function transcribeAudio(blob: Blob): Promise<string> {
   const formData = new FormData();
   formData.append('file', blob, 'recording.wav');
@@ -61,14 +73,14 @@ async function extractSymptoms(transcript: string): Promise<string> {
     throw new Error(errorData.error || 'Symptom extraction failed');
   }
   const data = await response.json();
-  return data.key_symptom; // Used internally only.
+  return data.key_symptom;
 }
 
 async function generateGuidelines(
   transcript: string,
   key_symptom: string,
   follow_up: { question: string; answer: string }[]
-): Promise<string> {
+): Promise<{ guidelines: string; audio: string }> {
   const response = await fetch(`${API_BASE_URL}/generate_guidelines`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -79,24 +91,68 @@ async function generateGuidelines(
     throw new Error(errorData.error || 'Guideline generation failed');
   }
   const data = await response.json();
-  return data.guidelines;
+  return { guidelines: data.guidelines, audio: data.audio };
 }
 
+/* ---------------- Main App Component ---------------- */
 function App() {
   const [step, setStep] = useState<'initial' | 'recording' | 'review' | 'followup' | 'final'>('initial');
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [editedTranscript, setEditedTranscript] = useState<string>('');
-  const [extractedSymptom, setExtractedSymptom] = useState<string>(''); // Internal only
+  const [extractedSymptom, setExtractedSymptom] = useState<string>('');
   const [followUpQuestions, setFollowUpQuestions] = useState<string[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [followUpAnswers, setFollowUpAnswers] = useState<string[]>([]);
   const [guidelines, setGuidelines] = useState<string>('');
+  const [audioUrl, setAudioUrl] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [overlayVisible, setOverlayVisible] = useState(true);
+  const [welcomeSpoken, setWelcomeSpoken] = useState(false);
 
-  // Recording complete: get transcript.
+  // Generalized error speech function.
+  const speakErrorAndRedirect = (msg: string) => {
+    speechSynthesis.cancel();
+    const utterance = createUtterance(`Dear patient, ${msg}`);
+    speechSynthesis.speak(utterance);
+    if (window.confirm(msg)) {
+      setStep('initial');
+    }
+  };
+
+  const speakWelcome = () => {
+    const utterance = createUtterance(
+      "Dear patient, welcome. We're here to help you feel your best. Please share your symptoms by speaking, and we'll guide you through home care. When you're ready, press the Start Recording button to begin."
+    );
+    speechSynthesis.speak(utterance);
+    setWelcomeSpoken(true);
+  };
+
+  // Handle overlay click: remove overlay and speak welcome (if not already spoken)
+  const handleOverlayClick = () => {
+    if (!welcomeSpoken) {
+      speakWelcome();
+    }
+    setOverlayVisible(false);
+  };
+
+  const handleStartRecording = () => {
+    speechSynthesis.cancel();
+    setStep('recording');
+  };
+
+  useEffect(() => {
+    if (audioUrl) {
+      const audio = new Audio(audioUrl);
+      audio.play().catch((err) => console.error("Audio playback failed:", err));
+    }
+  }, [audioUrl]);
+
   const handleRecordingComplete = async (blob: Blob) => {
     setRecordedBlob(blob);
+    // Speak message after stopping recording.
+    const utterance = createUtterance("Dear patient, your recording has been stopped. We are now processing your message. Please wait a moment.");
+    speechSynthesis.speak(utterance);
     setLoading(true);
     try {
       const transcribedText = await transcribeAudio(blob);
@@ -105,19 +161,35 @@ function App() {
       setStep('review');
     } catch (error: any) {
       console.error("Transcription error:", error);
-      alert("We couldn't understand your recording. Please try again.");
+      speakErrorAndRedirect("we couldn't understand your recording. Please try again.");
     }
     setLoading(false);
   };
 
-  // After reviewing, extract key symptom internally and set follow-up questions.
+  // Speak review instructions upon entering the review step.
+  useEffect(() => {
+    if (step === 'review') {
+      speechSynthesis.cancel();
+      const utterance = createUtterance("Dear patient, here is your transcribed message. Please review and correct it if needed. When you're ready, click Proceed to Follow-Up button to continue.");
+      speechSynthesis.speak(utterance);
+    }
+  }, [step]);
+
+  // Automatically speak each follow-up question in a conversational tone.
+  useEffect(() => {
+    if (step === 'followup' && followUpQuestions.length > 0) {
+      speechSynthesis.cancel();
+      const questionUtterance = createUtterance(`Dear patient, ${followUpQuestions[currentQuestionIndex]}`);
+      speechSynthesis.speak(questionUtterance);
+    }
+  }, [step, currentQuestionIndex, followUpQuestions]);
+
   const handleExtractSymptoms = async () => {
     if (!editedTranscript) return;
     setLoading(true);
     try {
       const symptom = await extractSymptoms(editedTranscript);
       setExtractedSymptom(symptom);
-      // Lookup follow-up questions based on the extracted symptom.
       const symptomLower = symptom.toLowerCase();
       let questions: string[] = [];
       for (const key in followUpQuestionsMapping) {
@@ -132,16 +204,15 @@ function App() {
       setStep('followup');
     } catch (error: any) {
       console.error("Symptom extraction error:", error);
-      alert("We had trouble understanding your symptoms. Please try again.");
+      speakErrorAndRedirect("we had trouble understanding your symptoms. Please try again.");
     }
     setLoading(false);
   };
 
-  // For each follow-up question, ensure an answer is provided before moving on.
   const handleNextFollowUp = () => {
     const answer = followUpAnswers[currentQuestionIndex] || "";
     if (!answer.trim()) {
-      alert("Please share your answer before proceeding.");
+      alert("Dear patient, please share your answer before proceeding.");
       return;
     }
     if (currentQuestionIndex + 1 < followUpQuestions.length) {
@@ -151,9 +222,12 @@ function App() {
     }
   };
 
-  // When final step is reached, generate guidelines.
+  // Speak a message upon entering the final step.
   useEffect(() => {
     if (step === "final") {
+      speechSynthesis.cancel();
+      const utterance = createUtterance("Dear patient, your personalized home care plan is being generated. Please wait a moment.");
+      speechSynthesis.speak(utterance);
       const generate = async () => {
         setLoading(true);
         try {
@@ -161,11 +235,12 @@ function App() {
             question: q,
             answer: followUpAnswers[i] || ""
           }));
-          const guidelinesResult = await generateGuidelines(editedTranscript, extractedSymptom, followUpData);
-          setGuidelines(guidelinesResult);
+          const result = await generateGuidelines(editedTranscript, extractedSymptom, followUpData);
+          setGuidelines(result.guidelines);
+          setAudioUrl(result.audio);
         } catch (error: any) {
           console.error("Guideline generation error:", error);
-          alert("We couldn't generate your care guidelines. Please try again.");
+          speakErrorAndRedirect("we couldn't generate your care guidelines. Please try again.");
         }
         setLoading(false);
       };
@@ -174,64 +249,67 @@ function App() {
   }, [step, editedTranscript, extractedSymptom, followUpQuestions, followUpAnswers]);
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-gray-100 py-8">
-      <div className="max-w-3xl w-full p-6 bg-white rounded-xl shadow-lg">
-        {/* Steps */}
+    <div className="min-h-screen relative flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-gray-100 py-8">
+      {overlayVisible && (
+        <div
+          className="absolute inset-0 z-50 flex flex-col items-center justify-start bg-black bg-opacity-50 text-white p-4"
+          onClick={handleOverlayClick}
+        >
+          <div className="mt-20 text-center w-full">
+            <h1 className="text-3xl font-bold">Tap to Continue</h1>
+            <p className="mt-2">Tap here to start and hear the welcome message.</p>
+          </div>
+        </div>
+      )}
+      <div className="max-w-3xl w-full p-6 bg-white rounded-xl shadow-xl transition-all duration-500 ease-in-out">
         {step === 'initial' && (
           <div className="space-y-6 text-center">
             <div className="flex justify-center">
-              <div className="flex items-center justify-center w-20 h-20 bg-blue-200 rounded-full shadow-lg">
+              <div className="flex items-center justify-center w-20 h-20 bg-blue-200 rounded-full shadow-xl">
                 <Mic className="w-10 h-10 text-blue-600" />
               </div>
             </div>
             <h1 className="text-4xl font-extrabold text-gray-900">Welcome, Dear Patient</h1>
             <p className="text-lg text-gray-700">
-              We’re here to help you feel your best. Share your symptoms, and we’ll guide you toward simple, caring home advice.
+              We're here to help you feel your best. Share your symptoms by speaking, and we'll guide you through home care.
             </p>
-            <Button
-              onClick={() => setStep('recording')}
-              className="px-6 py-3 mt-4 text-white bg-blue-600 rounded-lg shadow hover:bg-blue-700"
-            >
+            <Button onClick={handleStartRecording} className="px-6 py-3 mt-4 text-white bg-blue-600 rounded-lg shadow-lg hover:bg-blue-700 transition-colors">
               <Mic className="w-5 h-5 mr-2" /> Start Recording
             </Button>
           </div>
         )}
-
         {step === 'recording' && (
           <div className="space-y-6 text-center">
-            <h2 className="text-3xl font-semibold text-gray-900">Tell Us How You Feel</h2>
-            <AudioRecorder onRecordingComplete={handleRecordingComplete} />
+            <h2 className="text-3xl font-semibold text-gray-900">Recording...</h2>
+            <AudioRecorder onRecordingComplete={handleRecordingComplete} autoStart={true} />
             {loading && <p className="mt-4 text-gray-600">Listening...</p>}
           </div>
         )}
-
         {step === 'review' && (
           <div className="space-y-6">
             <h2 className="text-2xl font-semibold text-gray-900">Review Your Message</h2>
-            <p className="text-gray-700">
-              Please confirm or adjust the text so we understand you perfectly.
-            </p>
+            <p className="text-gray-700">Dear patient, please review and adjust the text so we fully understand you.</p>
             <textarea
               className="w-full p-3 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
               rows={6}
               value={editedTranscript}
               onChange={(e) => setEditedTranscript(e.target.value)}
             />
-            <Button
-              onClick={handleExtractSymptoms}
-              disabled={loading}
-              className="px-6 py-3 mt-4 text-white bg-green-600 rounded-lg shadow hover:bg-green-700"
-            >
+            <Button onClick={handleExtractSymptoms} disabled={loading} className="px-6 py-3 mt-4 text-white bg-green-600 rounded-lg shadow-lg hover:bg-green-700 transition-colors">
               Proceed to Follow-Up
             </Button>
           </div>
         )}
-
         {step === 'followup' && followUpQuestions.length > 0 && (
           <div className="space-y-6">
-            <h2 className="text-2xl font-semibold text-gray-900">
-              Follow-Up ({currentQuestionIndex + 1} of {followUpQuestions.length})
-            </h2>
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-semibold text-gray-900">
+                Follow-Up ({currentQuestionIndex + 1} of {followUpQuestions.length})
+              </h2>
+              <div className="text-sm text-gray-600">
+                {Math.round(((currentQuestionIndex + 1) / followUpQuestions.length) * 100)}% completed
+              </div>
+            </div>
             <p className="text-lg text-gray-700">{followUpQuestions[currentQuestionIndex]}</p>
             <textarea
               className="w-full p-3 mt-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
@@ -244,30 +322,27 @@ function App() {
                 setFollowUpAnswers(newAnswers);
               }}
             />
-            <Button
-              onClick={handleNextFollowUp}
-              className="px-6 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow hover:bg-purple-700"
-            >
+            <Button onClick={handleNextFollowUp} className="px-6 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow-lg hover:bg-purple-700 transition-colors">
               Next
             </Button>
           </div>
         )}
-
         {step === 'final' && (
           <div className="space-y-6 text-center">
             <h2 className="text-3xl font-bold text-gray-900">Your Personalized Home Care Plan</h2>
             {loading ? (
               <p className="text-lg text-gray-600">Generating your care plan...</p>
             ) : (
-              <div className="p-4 bg-gray-50 rounded-md shadow">
+              <div className="p-4 bg-gray-50 rounded-md shadow-lg">
                 <pre className="text-lg text-gray-800 whitespace-pre-wrap">{guidelines}</pre>
               </div>
             )}
+            <p className="text-sm text-gray-600 mt-2">
+              Dear patient, remember that these guidelines are informational. For any concerns, please consult your healthcare provider.
+            </p>
           </div>
         )}
       </div>
-
-      {/* Subtle footer message */}
       <footer className="mt-4 text-sm text-center text-gray-500">
         We care about you. Your well-being is our highest priority.
       </footer>
