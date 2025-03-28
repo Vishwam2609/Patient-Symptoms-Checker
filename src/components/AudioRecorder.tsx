@@ -25,7 +25,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
       setIsRecording(true);
     } catch (error) {
       console.error("Error accessing microphone:", error);
-      alert("Microphone access denied or not available.");
+      alert("We couldn't access your microphone. Please check your permissions and try again.");
     }
   };
 
@@ -39,11 +39,17 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
   return (
     <div className="text-center">
       {isRecording ? (
-        <button onClick={stopRecording} className="bg-red-500 text-white p-2 rounded">
+        <button
+          onClick={stopRecording}
+          className="px-4 py-2 text-white bg-red-500 rounded-lg shadow hover:bg-red-600 transition-colors"
+        >
           Stop Recording
         </button>
       ) : (
-        <button onClick={startRecording} className="bg-blue-500 text-white p-2 rounded">
+        <button
+          onClick={startRecording}
+          className="px-4 py-2 text-white bg-blue-500 rounded-lg shadow hover:bg-blue-600 transition-colors"
+        >
           Start Recording
         </button>
       )}

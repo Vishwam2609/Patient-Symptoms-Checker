@@ -26,6 +26,7 @@ import logging
 import gc
 import tempfile
 import shutil
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pyngrok import ngrok
@@ -35,26 +36,10 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 # Use GPU if available.
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Disable flex attention and set cache directory.
+# Disable flex attention and set a dedicated cache directory.
 os.environ["TRANSFORMERS_NO_FLEX_ATTENTION"] = "1"
 CACHE_DIR = "/tmp/transformers_cache"
 os.environ["TRANSFORMERS_CACHE"] = CACHE_DIR
-
-# Static extraction for key symptom.
-def static_extract_key_symptom(transcript: str) -> str:
-    symptoms = {
-        "fever": ["fever", "temperature", "hot"],
-        "coughing": ["cough", "coughing"],
-        "headache": ["headache", "head pain"],
-        "back pain": ["back pain", "lower back", "upper back"],
-        "toothache": ["toothache", "dental pain", "tooth pain"]
-    }
-    transcript_lower = transcript.lower()
-    for symptom, keywords in symptoms.items():
-        for keyword in keywords:
-            if keyword in transcript_lower:
-                return symptom
-    return transcript
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -65,9 +50,8 @@ CORS(app)
 NGROK_AUTH_TOKEN = "2sZL5k5FBMPppi3zC5xRRYuG5IP_6BiBZ5A9ee77WTxAfVWqa"
 ngrok.set_auth_token(NGROK_AUTH_TOKEN)
 
-# LLMHandler for guideline generation.
+# LLMHandler for key symptom extraction and guideline generation.
 class LLMHandler:
-    """Handles interactions with the LLM for generating guidelines."""
     def __init__(self):
         self.tokenizer = None
         self.model = None
@@ -82,9 +66,9 @@ class LLMHandler:
     def load_model(self):
         if self.pipeline is None:
             try:
-                logger.info("Clearing model cache before loading LLM for guidelines...")
+                logger.info("Clearing model cache before loading LLM...")
                 self.clear_model_cache()
-                logger.info("Loading LLM model for guidelines...")
+                logger.info("Loading LLM model...")
                 HUGGING_FACE_TOKEN = os.getenv("HUGGING_FACE_TOKEN", "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")
                 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "ContactDoctor/Bio-Medical-Llama-3-2-1B-CoT-012025")
                 self.tokenizer = AutoTokenizer.from_pretrained(
@@ -109,7 +93,7 @@ class LLMHandler:
                     tokenizer=self.tokenizer,
                     device=0 if DEVICE == "cuda" else -1
                 )
-                logger.info("LLM model loaded successfully for guidelines.")
+                logger.info("LLM model loaded successfully.")
             except Exception as e:
                 logger.error("Error loading LLM model", exc_info=True)
                 raise e
@@ -117,8 +101,11 @@ class LLMHandler:
     def generate_text(self, prompt, max_new_tokens, num_beams, temperature, repetition_penalty, early_stopping=True) -> str:
         if self.pipeline is None:
             self.load_model()
+        if self.pipeline is None:
+            logger.error("LLM pipeline is not available after loading.")
+            return ""
         try:
-            logger.info("Generating text from LLM for guidelines...")
+            logger.info("Generating text from LLM...")
             pipeline_output = self.pipeline(
                 prompt,
                 max_new_tokens=max_new_tokens,
@@ -132,23 +119,66 @@ class LLMHandler:
                 generated_text = result[0].get('generated_text', "")
             else:
                 generated_text = str(result[0]) if result else ""
-            return generated_text if generated_text is not None else ""
+            return generated_text.strip() if generated_text is not None else ""
         except Exception as e:
             logger.error("LLM generation error", exc_info=True)
             return ""
 
+    def extract_key_symptom(self, transcript: str) -> str:
+        prompt = (
+            "You are a caring doctor. Based on the patient description below, extract the key symptom described by the patient in one concise word or short phrase. "
+            "Output only the key symptom without any additional text.\n\n"
+            f"Patient Description: {transcript}\n"
+        )
+        return self.generate_text(prompt, max_new_tokens=20, num_beams=3, temperature=0.7, repetition_penalty=1.2)
+
     def generate_guidelines(self, transcript: str, key_symptom: str, follow_up: list) -> str:
+        """
+        Generates concise, patient-friendly home care guidelines using the full conversation context.
+        The guidelines are written in plain language for a patient with limited medical knowledge,
+        as if the doctor is continuing the conversation directly.
+        """
+        # Build the conversation context from the transcript, key symptom, and follow-up Q&A.
         follow_up_text = "\n".join(
             [f"Q: {item['question']}\nA: {item['answer']}" for item in follow_up]
         )
-        prompt = (
-            "You are a caring doctor. Based on the following patient description, key symptom, and follow-up responses, provide exactly three concise home care guidelines for the patient.\n"
-            "Output only the three guidelines, each on a separate line starting with '- ', with no additional text.\n\n"
-            f"Patient Description: {transcript}\n"
-            f"Key Symptom: {key_symptom}\n"
-            f"Follow-Up Responses:\n{follow_up_text}\n"
+        detailed_context = (
+            "Conversation so far:\n"
+            f"Patient's description: {transcript}\n"
+            f"Key symptom: {key_symptom}\n"
+            f"Follow-up Q&A:\n{follow_up_text}\n"
         )
-        return self.generate_text(prompt, max_new_tokens=300, num_beams=5, temperature=0.7, repetition_penalty=1.2)
+
+        # Construct a simple, patient-friendly prompt.
+        prompt = (
+            "You are a caring doctor speaking directly to a patient with limited medical knowledge. "
+            "Based on the conversation below, please give very simple, easy-to-follow home care guidelines for a headache. "
+            "Keep your language basic and friendly so that the patient clearly understands what to do at home. "
+            "Respond in one clear, complete, and concise paragraph, as if you are continuing your conversation with the patient.\n\n"
+            f"{detailed_context}\n\n"
+            "Answer:"
+        )
+
+        # Attempt to generate a complete response up to 10 times.
+        for _ in range(10):
+            result = self.generate_text(
+                prompt,
+                max_new_tokens=250,  # Increased token limit to allow complete output.
+                num_beams=3,
+                temperature=0.5,
+                repetition_penalty=1.0,
+                early_stopping=True  # Encourage complete sentence generation.
+            )
+            # Remove any echoed prompt text by splitting on "Answer:"
+            if "Answer:" in result:
+                result = result.split("Answer:")[-1].strip()
+            # Collapse whitespace/newlines into a single paragraph.
+            paragraph = " ".join(result.split())
+            # Check if the paragraph appears complete (ends with a period or similar).
+            if paragraph and len(paragraph.split()) > 10 and paragraph[-1] in ".!?":
+                return paragraph
+
+        return "No valid guidelines generated."
 
 llm_handler = LLMHandler()
 
@@ -161,7 +191,7 @@ def transcribe():
     with tempfile.NamedTemporaryFile(suffix=".wav") as temp_audio:
         audio_file.save(temp_audio.name)
         try:
-            model = whisper.load_model("tiny", device=DEVICE)
+            model = whisper.load_model("small", device=DEVICE)
         except Exception as e:
             logger.error("Whisper model load failed", exc_info=True)
             return jsonify({"error": f"Model load failed: {str(e)}"}), 500
@@ -195,13 +225,12 @@ def extract_symptoms():
         return jsonify({"error": "The provided transcript is empty."}), 400
 
     try:
-        key_symptom = static_extract_key_symptom(transcript)
+        key_symptom = llm_handler.extract_key_symptom(transcript)
     except Exception as e:
-        logger.error("Static extraction error", exc_info=True)
-        return jsonify({"error": f"Static extraction error: {str(e)}"}), 500
+        logger.error("Key symptom extraction error", exc_info=True)
+        return jsonify({"error": f"Key symptom extraction error: {str(e)}"}), 500
 
     logger.info(f"Extracted key symptom (internal): '{key_symptom}'")
-    # Return key symptom internally; frontend will not display it.
     return jsonify({"key_symptom": key_symptom})
 
 @app.route("/generate_guidelines", methods=["POST"])
@@ -212,7 +241,7 @@ def generate_guidelines():
 
     transcript = data["transcript"].strip()
     key_symptom = data["key_symptom"].strip()
-    follow_up = data["follow_up"]  # Expect a list of objects with 'question' and 'answer'
+    follow_up = data["follow_up"]
     for item in follow_up:
         if not item.get("answer", "").strip():
             return jsonify({"error": "All follow-up questions must be answered."}), 400
