@@ -163,19 +163,19 @@ class LLMHandler:
         for _ in range(10):
             result = self.generate_text(
                 prompt,
-                max_new_tokens=250,  # Increased token limit to allow complete output.
-                num_beams=3,
+                max_new_tokens=300,   # Increased token limit to allow more complete output.
+                num_beams=5,
                 temperature=0.5,
                 repetition_penalty=1.0,
-                early_stopping=True  # Encourage complete sentence generation.
+                early_stopping=True
             )
             # Remove any echoed prompt text by splitting on "Answer:"
             if "Answer:" in result:
                 result = result.split("Answer:")[-1].strip()
             # Collapse whitespace/newlines into a single paragraph.
             paragraph = " ".join(result.split())
-            # Check if the paragraph appears complete (ends with a period or similar).
-            if paragraph and len(paragraph.split()) > 10 and paragraph[-1] in ".!?":
+            # Check if the paragraph is sufficiently long (e.g., at least 30 words).
+            if paragraph and len(paragraph.split()) >= 30:
                 return paragraph
 
         return "No valid guidelines generated."
