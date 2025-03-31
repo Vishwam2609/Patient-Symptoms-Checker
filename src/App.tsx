@@ -3,34 +3,34 @@ import { AudioRecorder } from './components/AudioRecorder';
 import { Button } from './components/ui/button';
 import { Mic, Loader2 } from 'lucide-react';
 
-const API_BASE_URL = 'https://8341-100-27-249-117.ngrok-free.app';
+const API_BASE_URL = 'https://1b2b-18-216-7-19.ngrok-free.app';
 
 // Static follow-up questions mapping.
 const staticFollowUpQuestionsMapping: { [key: string]: string[] } = {
   fever: [
-    "Dear patient, when did you first notice your fever, and has your temperature been consistently high or fluctuating?",
-    "Dear patient, are you experiencing any other symptoms like chills, sweating, or body aches?",
-    "Dear patient, have you had any recent exposures—such as travel or contact with someone ill—that might explain your fever?"
+    "When did you first notice your fever, and has your temperature been consistently high or fluctuating?",
+    "Are you experiencing any other symptoms like chills, sweating, or body aches?",
+    "Have you had any recent exposures—such as travel or contact with someone ill—that might explain your fever?"
   ],
   coughing: [
-    "Dear patient, when did your cough start, and is it persistent or intermittent?",
-    "Dear patient, is your cough dry, or are you producing any phlegm? If so, what color is it?",
-    "Dear patient, do you have any other breathing difficulties, such as shortness of breath or chest tightness?"
+    "When did your cough start, and is it persistent or intermittent?",
+    "Is your cough dry, or are you producing any phlegm? If so, what color is it?",
+    "Do you have any other breathing difficulties, such as shortness of breath or chest tightness?"
   ],
   headache: [
-    "Dear patient, when did your headache begin, and how would you describe its intensity and duration?",
-    "Dear patient, is the headache concentrated in one area or more generalized?",
-    "Dear patient, are you experiencing nausea, sensitivity to light or sound, or any visual disturbances?"
+    "When did your headache begin, and how would you describe its intensity and duration?",
+    "Is the headache concentrated in one area or more generalized?",
+    "Are you experiencing nausea, sensitivity to light or sound, or any visual disturbances?"
   ],
   backpain: [
-    "Dear patient, when did your backpain start, and is it in a specific area such as your lower back?",
-    "Dear patient, does the pain get worse with movement or remain constant?",
-    "Dear patient, have you engaged in any strenuous activities recently that might have strained your backpain?"
+    "When did your backpain start, and is it in a specific area such as your lower back?",
+    "Does the pain get worse with movement or remain constant?",
+    "Have you engaged in any strenuous activities recently that might have strained your back?"
   ],
   toothache: [
-    "Dear patient, when did your toothache begin, and is the pain constant or does it come and go?",
-    "Dear patient, how would you describe the pain, and does it spread to nearby areas?",
-    "Dear patient, have you noticed any other dental issues like gum swelling or increased sensitivity?"
+    "When did your toothache begin, and is the pain constant or does it come and go?",
+    "How would you describe the pain, and does it spread to nearby areas?",
+    "Have you noticed any other dental issues like gum swelling or increased sensitivity?"
   ]
 };
 
@@ -103,12 +103,6 @@ async function generateGuidelines(
 ): Promise<{ guidelines: string; audio: string }> {
   const allFollowUp = [...static_followup, ...dynamic_followup];
   const followUpText = allFollowUp.map(item => `Q: ${item.question}\nA: ${item.answer}`).join("\n");
-  const detailed_context = (
-    "Conversation so far:\n" +
-    `Patient's description: ${transcript}\n` +
-    `Key symptom: ${key_symptom}\n` +
-    `Follow-up Q&A:\n${followUpText}\n`
-  );
   const response = await fetch(`${API_BASE_URL}/generate_guidelines`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -124,11 +118,28 @@ async function generateGuidelines(
 
 /* ---------------- Loading Indicator Component ---------------- */
 const LoadingIndicator = ({ message }: { message: string }) => (
-  <div className="flex flex-col items-center justify-center h-full">
-    <h2 className="text-3xl font-semibold text-gray-900">{message}</h2>
-    <div className="flex flex-col items-center justify-center space-y-2 mt-4">
-      <Loader2 className="animate-spin w-8 h-8 text-blue-600" />
-      <p className="text-lg text-gray-600">Processing, please wait...</p>
+  <div className="flex flex-col items-center justify-center h-full transition-all duration-300">
+    <h2 className="text-2xl font-semibold text-gray-900">{message}</h2>
+    <div className="flex flex-col items-center justify-center mt-4 space-y-2">
+      <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
+      <p className="text-base text-gray-600">Processing, please wait...</p>
+    </div>
+  </div>
+);
+
+/* ---------------- Modal Component for Error Alerts ---------------- */
+interface ModalProps {
+  message: string;
+  onClose: () => void;
+}
+const Modal: React.FC<ModalProps> = ({ message, onClose }) => (
+  <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+    <div className="bg-white rounded-lg shadow-xl p-6 max-w-sm w-full text-center">
+      <h2 className="text-xl font-semibold mb-4">Alert</h2>
+      <p className="mb-6">{message}</p>
+      <Button onClick={onClose} className="px-6 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600">
+        Close
+      </Button>
     </div>
   </div>
 );
@@ -161,15 +172,14 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [welcomeSpoken, setWelcomeSpoken] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string>('');
 
   /* ----------- Error Handling & Speech ----------- */
   const speakErrorAndRedirect = (msg: string) => {
     speechSynthesis.cancel();
     const utterance = createUtterance(`Dear patient, ${msg}`);
     speechSynthesis.speak(utterance);
-    if (window.confirm(msg)) {
-      setStep('initial');
-    }
+    setErrorMsg(msg);
   };
 
   const speakWelcome = () => {
@@ -190,6 +200,12 @@ function App() {
   const handleStartRecording = () => {
     speechSynthesis.cancel();
     setStep('recording');
+  };
+
+  // On review screen, clicking "Proceed to Follow-Up" sets the step to followupLoading.
+  const handleProceedToFollowUp = () => {
+    setStep('followupLoading');
+    setLoading(true);
   };
 
   useEffect(() => {
@@ -220,51 +236,40 @@ function App() {
   useEffect(() => {
     if (step === 'review') {
       speechSynthesis.cancel();
-      const utterance = createUtterance("Dear patient, here is your transcribed message. Please review and correct it if necessary. When you're ready, click Proceed to Follow-Up to continue.");
+      const utterance = createUtterance("Dear patient, here is your transcribed message. Please review and correct it if necessary. When you're ready, click Proceed to Follow-Up Button to continue.");
       speechSynthesis.speak(utterance);
     }
   }, [step]);
 
-  /* ----------- Extract Symptom & Transition ----------- */
-  const handleExtractSymptoms = async () => {
-    if (!editedTranscript) return;
-    // Immediately transition to the appropriate transitional state.
-    // We'll assume static follow-up is the default transitional state.
-    setStep('followupLoading');
-    setLoading(true);
-    try {
-      const symptom = await extractSymptoms(editedTranscript);
-      const firstLine = symptom.split('\n')[0];
-      const cleanedSymptom = firstLine.toLowerCase().trim().replace(/[^a-z]/g, "");
-      setExtractedSymptom(cleanedSymptom);
-      // If static follow-up questions exist for the symptom, remain in followupLoading.
-      // Otherwise, transition to dynamic follow-up loading.
-      if (!staticFollowUpQuestionsMapping[cleanedSymptom]) {
-        setStep('dynamicFollowupLoading');
-      }
-    } catch (error: any) {
-      console.error("Symptom extraction error:", error);
-      speakErrorAndRedirect("we had trouble understanding your symptoms. Please try again.");
-    }
-    setLoading(false);
-  };  
-
-  /* ----------- Transitional Step: Follow-Up Loading (Static) ----------- */
+  /* ----------- Transition: Extract Symptom & Check for Follow-Up Questions ----------- */
   useEffect(() => {
     if (step === 'followupLoading') {
       speechSynthesis.cancel();
-      const utterance = createUtterance("Dear patient, we are asking your follow-up questions. Please wait a moment.");
+      const utterance = createUtterance("Dear patient, please wait while we prepare your follow-up questions.");
       speechSynthesis.speak(utterance);
-
-      setTimeout(() => {
-        const questions = staticFollowUpQuestionsMapping[extractedSymptom];
-        setStaticFollowUpQuestions(questions);
-        setStaticFollowUpAnswers(Array(questions.length).fill(""));
-        setCurrentStaticIndex(0);
-        setStep('followup');
-      }, 500);
+      (async () => {
+        try {
+          const symptom = await extractSymptoms(editedTranscript);
+          const firstLine = symptom.split('\n')[0];
+          const cleanedSymptom = firstLine.toLowerCase().trim().replace(/[^a-z]/g, "");
+          console.log("Extracted key symptom:", cleanedSymptom);
+          setExtractedSymptom(cleanedSymptom);
+          if (staticFollowUpQuestionsMapping[cleanedSymptom]) {
+            setStaticFollowUpQuestions(staticFollowUpQuestionsMapping[cleanedSymptom]);
+            setStaticFollowUpAnswers(Array(staticFollowUpQuestionsMapping[cleanedSymptom].length).fill(""));
+            setCurrentStaticIndex(0);
+            setStep('followup');
+          } else {
+            setStep('dynamicFollowupLoading');
+          }
+        } catch (error: any) {
+          console.error("Symptom extraction error:", error);
+          speakErrorAndRedirect("we had trouble understanding your symptoms. Please try again.");
+        }
+        setLoading(false);
+      })();
     }
-  }, [step, extractedSymptom]);
+  }, [step, editedTranscript]);
 
   /* ----------- Static Follow-Up ----------- */
   useEffect(() => {
@@ -288,21 +293,19 @@ function App() {
     }
   };
 
-  /* ----------- Transitional Step: Dynamic Follow-Up Loading ----------- */
+  /* ----------- Transitional: Dynamic Follow-Up Loading ----------- */
   useEffect(() => {
     if (step === 'dynamicFollowupLoading') {
       speechSynthesis.cancel();
       const utterance = createUtterance("Dear patient, we are generating additional follow-up questions. Please wait a moment.");
       speechSynthesis.speak(utterance);
       setLoading(true);
-      // For example, in your dynamic follow-up loading effect:
       (async () => {
         try {
           const staticQA = staticFollowUpQuestions.map((q, i) => ({
             question: q,
             answer: staticFollowUpAnswers[i] || ""
           }));
-          // Pass editedTranscript (the reviewed, finalized transcript) as reviewed_transcript.
           const questions = await generateFollowupQuestions(editedTranscript, extractedSymptom, staticQA);
           setDynamicFollowUpQuestions(questions);
           setDynamicFollowUpAnswers(Array(questions.length).fill(""));
@@ -368,25 +371,27 @@ function App() {
   }, [step, transcript, extractedSymptom, staticFollowUpQuestions, staticFollowUpAnswers, dynamicFollowUpQuestions, dynamicFollowUpAnswers]);
 
   return (
-    <div className="min-h-screen relative flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-gray-100 py-8">
+    <div className="relative flex flex-col items-center justify-center min-h-screen py-8 bg-gradient-to-br from-blue-100 to-gray-200">
       {overlayVisible && (
         <div
-          className="absolute inset-0 z-50 flex flex-col items-center justify-start bg-black bg-opacity-50 text-white p-4"
+          className="absolute inset-0 z-50 flex flex-col items-center justify-start bg-black bg-opacity-60 animate-fadeIn cursor-pointer"
           onClick={handleOverlayClick}
         >
-          <div className="mt-20 text-center w-full">
-            <h1 className="text-3xl font-bold">Tap to Continue</h1>
-            <p className="mt-2">Tap here to start and hear the welcome message.</p>
+          <div className="mt-16 text-center">
+            <h1 className="text-4xl font-bold text-white">Tap to Begin</h1>
+            <p className="mt-2 text-lg text-gray-200">Tap anywhere to hear the welcome message.</p>
           </div>
         </div>
       )}
 
-      <div className="max-w-3xl w-full p-6 bg-white rounded-xl shadow-xl transition-all duration-500 ease-in-out">
+      {errorMsg && <Modal message={errorMsg} onClose={() => setErrorMsg('')} />}
+
+      <div className="w-full max-w-3xl p-8 bg-white rounded-xl shadow-2xl transition-all duration-500">
         {step === 'initial' && (
           <div className="space-y-6 text-center">
             <div className="flex justify-center">
-              <div className="flex items-center justify-center w-20 h-20 bg-blue-200 rounded-full shadow-xl">
-                <Mic className="w-10 h-10 text-blue-600" />
+              <div className="flex items-center justify-center w-24 h-24 bg-blue-200 rounded-full shadow-2xl">
+                <Mic className="w-12 h-12 text-blue-600" />
               </div>
             </div>
             <h1 className="text-4xl font-extrabold text-gray-900">Welcome, Dear Patient</h1>
@@ -395,7 +400,7 @@ function App() {
             </p>
             <Button
               onClick={handleStartRecording}
-              className="px-6 py-3 mt-4 text-white bg-blue-600 rounded-lg shadow-xl hover:bg-blue-700 transition-colors"
+              className="px-8 py-3 mt-4 text-white bg-blue-600 rounded-lg shadow-xl hover:bg-blue-700 transition-colors"
             >
               <Mic className="w-5 h-5 mr-2" /> Start Recording
             </Button>
@@ -411,36 +416,36 @@ function App() {
 
         {step === 'review' && (
           <div className="space-y-6">
-            <h2 className="text-2xl font-semibold text-gray-900">Review Your Message</h2>
-            <p className="text-gray-700">Dear patient, please review and adjust the text so we fully understand you.</p>
+            <h2 className="text-3xl font-semibold text-gray-900">Review Your Message</h2>
+            <p className="text-gray-700">
+              Dear patient, please review and adjust the text so we fully understand you.
+            </p>
             <textarea
-              className="w-full p-3 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="w-full p-4 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors"
               rows={6}
               value={editedTranscript}
               onChange={(e) => setEditedTranscript(e.target.value)}
             />
             <Button
-              onClick={handleExtractSymptoms}
+              onClick={handleProceedToFollowUp}
               disabled={loading}
-              className="px-6 py-3 mt-4 text-white bg-green-600 rounded-lg shadow-xl hover:bg-green-700 transition-colors"
+              className="px-8 py-3 mt-4 text-white bg-green-600 rounded-lg shadow-xl hover:bg-green-700 transition-colors"
             >
               Proceed to Follow-Up
             </Button>
           </div>
         )}
 
-        {step === 'followupLoading' && (
-          <LoadingIndicator message="Asking Follow-Up Questions..." />
-        )}
+        {step === 'followupLoading' && <LoadingIndicator message="Preparing Follow-Up Questions..." />}
 
         {step === 'followup' && staticFollowUpQuestions.length > 0 && (
           <div className="space-y-6">
-            <h2 className="text-2xl font-semibold text-gray-900">
+            <h2 className="text-3xl font-semibold text-gray-900">
               Static Follow-Up ({currentStaticIndex + 1} of {staticFollowUpQuestions.length})
             </h2>
-            <p className="text-lg text-gray-700">{staticFollowUpQuestions[currentStaticIndex]}</p>
+            <p className="text-xl text-gray-700">{staticFollowUpQuestions[currentStaticIndex]}</p>
             <textarea
-              className="w-full p-3 mt-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+              className="w-full p-4 mt-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-400 transition-colors"
               rows={3}
               placeholder="Type your answer here..."
               value={staticFollowUpAnswers[currentStaticIndex] || ""}
@@ -452,25 +457,23 @@ function App() {
             />
             <Button
               onClick={handleNextStaticFollowUp}
-              className="px-6 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow-xl hover:bg-purple-700 transition-colors"
+              className="px-8 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow-xl hover:bg-purple-700 transition-colors"
             >
               Next
             </Button>
           </div>
         )}
 
-        {step === 'dynamicFollowupLoading' && (
-          <LoadingIndicator message="Generating Follow-Up Questions..." />
-        )}
+        {step === 'dynamicFollowupLoading' && <LoadingIndicator message="Generating Follow-Up Questions..." />}
 
         {step === 'dynamicFollowup' && dynamicFollowUpQuestions.length > 0 && (
           <div className="space-y-6">
-            <h2 className="text-2xl font-semibold text-gray-900">
+            <h2 className="text-3xl font-semibold text-gray-900">
               Dynamic Follow-Up ({currentDynamicIndex + 1} of {dynamicFollowUpQuestions.length})
             </h2>
-            <p className="text-lg text-gray-700">{dynamicFollowUpQuestions[currentDynamicIndex]}</p>
+            <p className="text-xl text-gray-700">{dynamicFollowUpQuestions[currentDynamicIndex]}</p>
             <textarea
-              className="w-full p-3 mt-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+              className="w-full p-4 mt-2 border rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-purple-400 transition-colors"
               rows={3}
               placeholder="Type your answer here..."
               value={dynamicFollowUpAnswers[currentDynamicIndex] || ""}
@@ -482,7 +485,7 @@ function App() {
             />
             <Button
               onClick={handleNextDynamicFollowUp}
-              className="px-6 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow-xl hover:bg-purple-700 transition-colors"
+              className="px-8 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow-xl hover:bg-purple-700 transition-colors"
             >
               Next
             </Button>
@@ -494,17 +497,17 @@ function App() {
             {loading ? (
               <LoadingIndicator message="Generating Home Care Plan..." />
             ) : (
-              <div className="p-4 bg-gray-50 rounded-md shadow-xl">
+              <div className="p-6 rounded-md shadow-xl bg-gray-50">
                 <pre className="text-lg text-gray-800 whitespace-pre-wrap">{guidelines}</pre>
               </div>
             )}
-            <p className="text-sm text-gray-600 mt-2">
+            <p className="mt-2 text-sm text-gray-600">
               Dear patient, remember these guidelines are informational. For any concerns, please consult your healthcare provider.
             </p>
           </div>
         )}
       </div>
-      <footer className="mt-4 text-sm text-center text-gray-500">
+      <footer className="mt-6 text-sm text-center text-gray-500">
         We care about you. Your well-being is our highest priority.
       </footer>
     </div>

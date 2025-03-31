@@ -190,67 +190,74 @@ class LLMHandler:
         # Remove enumeration prefixes like "1. ", "2. ", etc.
         final_paragraph = re.sub(r"^\d+\.\s+", "", final_paragraph)
         final_paragraph = re.sub(r"(\s)\d+\.\s+", r"\1", final_paragraph)
-        # Remove bolded section headings e.g., "**Nausea Management**:".
+        # Remove any bolded section headings e.g., "**Nausea Management**:".
         final_paragraph = re.sub(r"\*\*.*?\*\*\s*:\s*", "", final_paragraph)
-        
-        # Insert a newline after each sentence (after each period followed by whitespace).
-        final_paragraph = re.sub(r"\.\s+", ".\n", final_paragraph)
         
         return final_paragraph
 
     def generate_followup_questions(self, reviewed_transcript: str, key_symptom: str, static_followup: list) -> list:
         """
-        Dynamically generates exactly three additional follow-up questions based on the patient's reviewed transcript,
-        the extracted key symptom, and the static follow-up Q&A.
-        The questions must be medically relevant, clear, and specific inquiries that request additional details
-        about the patient's condition. They must be stand-alone, written in plain language, and should not include
-        any greetings, sign-offs, commentary, or extraneous text.
+        Dynamically generates exactly three distinct follow-up questions based on the patient's reviewed transcript,
+        the extracted key symptom, and the static follow-up Q&A (with answers provided for context).
+        The generated questions must be medically relevant and address different aspects of the patient's condition.
+        They must be stand-alone, written in plain language, and should not include any static answers, greetings, or extraneous commentary.
         Output exactly three questions, one per line, each ending with a question mark.
         """
-        # Count the number of static Q&A items (without including their content)
-        static_count = len(static_followup)
+        # Build a context that includes static Q&A details, which are provided only for reference.
+        static_context = "\n".join(
+            [f"Q: {item['question']}\nA: {item['answer']}" for item in static_followup]
+        )
         
-        # Construct context using the reviewed transcript.
         context = (
             f"Patient's description: {reviewed_transcript}\n"
             f"Key symptom: {key_symptom}\n"
-            f"Note: There are {static_count} static follow-up Q&A items provided separately. "
-            "Do not reference these items. Ensure that each follow-up question is medically relevant, meaningful, and contains sufficient detail (at least four words). "
-            "Avoid generic or ambiguous questions such as a mere list of interrogative words.\n"
+            "Static Follow-up Q&A (for context only, do not repeat these answers):\n" 
+            + (static_context if static_context else "None") + "\n"
         )
         
         prompt = (
-            "You are a caring doctor asking follow-up questions to better understand a patient's condition. "
-            "Based solely on the context below, generate exactly three stand-alone follow-up questions that are medically relevant, detailed, and specific. "
-            "Each question must be a clear inquiry asking for additional details about the patient's condition. "
-            "Do not include any greetings, farewells, commentary, or extraneous phrases. "
-            "Each question should start with an interrogative word or auxiliary verb (e.g., What, How, Do, Does, Could) and must end with a question mark. "
-            "Ensure that each question is meaningful and contains at least four words. "
-            "Do not echo any labels or context information. Output only the three questions, one per line, with no extra text.\n\n"
+            "You are a caring doctor who is experienced in asking insightful follow-up questions. "
+            "Based solely on the context below, generate exactly three distinct follow-up questions that are medically relevant. "
+            "Focus on asking for additional details that are not already addressed in the static follow-up Q&A. "
+            "Do not include any answers, commentary, or letter prefixes (e.g., 'A:', 'B:', 'C:'). "
+            "Your output should contain only three complete question sentences, each beginning with an interrogative word or auxiliary verb (e.g., What, How, Do, Does, Could) and ending with a question mark.\n\n"
             f"Context:\n{context}\n"
             "### OUTPUT:\n"
         )
         
-        result = self.generate_text(prompt, max_new_tokens=50, num_beams=3, temperature=0.7, repetition_penalty=1.2)
+        result = self.generate_text(prompt, max_new_tokens=150, num_beams=5, temperature=0.7, repetition_penalty=1.2)
         
+        # If the output label is present, extract the text after it.
         if "### OUTPUT:" in result:
             result = result.split("### OUTPUT:")[-1].strip()
         
+        # Split the result into individual lines.
         questions = [line.strip() for line in result.split("\n") if line.strip()]
         
         import re
         cleaned_questions = []
         for q in questions:
+            # Remove any letter prefixes such as "A:", "B:", "C:".
+            q = re.sub(r'^[A-Z]:\s*', '', q)
+            # Remove any unwanted dynamic follow-up numbering if present.
             q = re.sub(r'^Dynamic Follow-Up\s*\(\s*\d+\s+of\s+\d+\s*\)\s*', '', q)
+            # Remove any extraneous numbering or bullet prefixes.
             q = re.sub(r'^[\d\.\-\)\s]+', '', q)
             cleaned_questions.append(q)
         
+        # Ensure each question ends with a question mark.
         cleaned_questions = [q if q.endswith('?') else q + '?' for q in cleaned_questions]
         
-        interrogative_pattern = re.compile(r"^(?:\s*(what|how|do|does|could)[\s,]*)+\?$", re.IGNORECASE)
-        valid_questions = [q for q in cleaned_questions if len(q.split()) >= 4 and not interrogative_pattern.fullmatch(q)]
+        # Remove duplicate questions while preserving order.
+        seen = set()
+        distinct_questions = []
+        for q in cleaned_questions:
+            if q not in seen:
+                seen.add(q)
+                distinct_questions.append(q)
         
-        return valid_questions[:3]
+        # Return exactly three distinct questions.
+        return distinct_questions[:3]
 
 llm_handler = LLMHandler()
 

@@ -30,7 +30,6 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
       };
       mediaRecorderRef.current.start();
       setIsRecording(true);
-      // Start recording timer.
       timerRef.current = window.setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
@@ -61,15 +60,15 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
   return (
     <div className="flex flex-col items-center">
       {isRecording && (
-        <div className="mb-4 flex items-center space-x-2">
-          <span className="animate-pulse bg-red-500 rounded-full w-3 h-3"></span>
-          <span className="text-red-600 font-semibold">Recording... {recordingTime}s</span>
+        <div className="flex items-center mb-4 space-x-3">
+          <span className="w-4 h-4 bg-red-500 rounded-full animate-pulse"></span>
+          <span className="font-semibold text-red-600 text-lg">Recording... {recordingTime}s</span>
         </div>
       )}
       {isRecording ? (
         <button
           onClick={stopRecording}
-          className="px-6 py-3 bg-red-500 text-white rounded-full shadow-lg hover:bg-red-600 transition-all duration-200"
+          className="px-6 py-3 text-white bg-red-500 rounded-full shadow-lg hover:bg-red-600 transition-all duration-200"
         >
           Stop Recording
         </button>
@@ -77,7 +76,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
         !autoStart && (
           <button
             onClick={startRecording}
-            className="px-6 py-3 bg-blue-500 text-white rounded-full shadow-lg hover:bg-blue-600 transition-all duration-200"
+            className="px-6 py-3 text-white bg-blue-500 rounded-full shadow-lg hover:bg-blue-600 transition-all duration-200"
           >
             Start Recording
           </button>
