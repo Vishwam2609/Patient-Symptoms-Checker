@@ -29,7 +29,7 @@ import shutil
 import re
 import base64
 import io
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pyngrok import ngrok
 import whisper
@@ -54,7 +54,7 @@ CORS(app)
 NGROK_AUTH_TOKEN = "2sZL5k5FBMPppi3zC5xRRYuG5IP_6BiBZ5A9ee77WTxAfVWqa"
 ngrok.set_auth_token(NGROK_AUTH_TOKEN)
 
-# LLMHandler for key symptom extraction and guideline generation.
+# LLMHandler for key symptom extraction, follow-up question generation, and guideline generation.
 class LLMHandler:
     def __init__(self):
         self.tokenizer = None
@@ -130,9 +130,7 @@ class LLMHandler:
 
     def generate_guidelines(self, transcript: str, key_symptom: str, follow_up: list) -> str:
         """
-        Generates a Personalized Home Care Plan using the full conversation context.
-        It considers the patient's description, key symptom, and follow-up Q&A,
-        and returns a complete, clear set of home care guidelines.
+        Generates concise, patient-friendly home care guidelines using the full conversation context.
         """
         follow_up_text = "\n".join(
             [f"Q: {item['question']}\nA: {item['answer']}" for item in follow_up]
@@ -147,8 +145,8 @@ class LLMHandler:
         prompt = (
             "You are a caring doctor speaking directly to a patient with limited medical knowledge. "
             "Based on the conversation below, please provide a Personalized Home Care Plan. "
-            "Ensure that your advice is clear, actionable, and written in plain language so that the patient can easily follow it at home. "
-            "Respond in one complete and concise paragraph, as if you are continuing your conversation with the patient.\n\n"
+            "Ensure that your advice is clear, actionable, and written in plain language so the patient can easily follow it at home. "
+            "Respond in one complete, concise paragraph, as if you are continuing your conversation with the patient.\n\n"
             f"{detailed_context}\n\n"
             "Your Personalized Home Care Plan:"
         )
@@ -173,9 +171,43 @@ class LLMHandler:
 
         return "No valid guidelines generated."
 
-llm_handler = LLMHandler()
+    import re
 
-import re
+    def generate_followup_questions(self, transcript: str, key_symptom: str) -> list:
+        """
+        Dynamically generates exactly three concise follow-up questions that help gather additional details 
+        about the patient's condition (duration, triggers, severity, daily impact) without repeating static questions.
+        The questions are written in plain, friendly language, and each ends with a question mark.
+        Output exactly three questions, one per line, with no extra commentary or numbering.
+        """
+        context = f"Patient's description: {transcript}\nKey symptom: {key_symptom}\n"
+        prompt = (
+            "You are a caring doctor having a conversation with a patient. Based on the context below, generate exactly three follow-up questions "
+            "that will help gather additional details about the patient's condition such as the duration, triggers, severity, and impact on daily life. "
+            "Ensure the questions are friendly, written in plain language, and do not repeat any questions that might be covered by static follow-up questions. "
+            "Output only the three questions, one per line, with no extra commentary, and each must end with a question mark.\n\n"
+            f"Context:\n{context}\n"
+            "### OUTPUT:\n"
+        )
+        result = self.generate_text(prompt, max_new_tokens=100, num_beams=3, temperature=0.7, repetition_penalty=1.2)
+        
+        # Extract only the part after the delimiter.
+        if "### OUTPUT:" in result:
+            result = result.split("### OUTPUT:")[-1].strip()
+        
+        # Split into lines and filter out empty ones.
+        questions = [line.strip() for line in result.split("\n") if line.strip()]
+        
+        # Remove any leading numbering or bullets.
+        questions = [re.sub(r'^[\d\.\-\s]+', '', q) for q in questions]
+        
+        # Ensure each question ends with a question mark.
+        questions = [q if q.endswith('?') else q + '?' for q in questions]
+        
+        # Return exactly three questions.
+        return questions[:3]
+
+llm_handler = LLMHandler()
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
@@ -186,14 +218,12 @@ def transcribe():
     with tempfile.NamedTemporaryFile(suffix=".wav") as temp_audio:
         audio_file.save(temp_audio.name)
         try:
-            # Use the English-only model for improved accuracy.
             model = whisper.load_model("small.en", device=DEVICE)
         except Exception as e:
             logger.error("Whisper model load failed", exc_info=True)
             return jsonify({"error": f"Model load failed: {str(e)}"}), 500
 
         try:
-            # Use fp16=False for stability if needed.
             result = model.transcribe(temp_audio.name, fp16=False)
             logger.info(f"Raw transcription result: {result}")
         except Exception as e:
@@ -201,14 +231,9 @@ def transcribe():
             return jsonify({"error": f"Transcription failed: {str(e)}"}), 500
 
         transcript_raw = result.get("text", "")
-        transcript = (transcript_raw.strip() 
-                      if not isinstance(transcript_raw, list) 
-                      else " ".join(transcript_raw).strip())
-
-        # Enhance the transcript: collapse multiple spaces and remove unusual characters.
-        transcript = re.sub(r'\s+', ' ', transcript)         # Collapse multiple spaces.
-        transcript = re.sub(r'[^\w\s.,!?]', '', transcript)    # Remove non-standard characters.
-
+        transcript = transcript_raw.strip() if not isinstance(transcript_raw, list) else " ".join(transcript_raw).strip()
+        transcript = re.sub(r'\s+', ' ', transcript)
+        transcript = re.sub(r'[^\w\s.,!?]', '', transcript)
         logger.info(f"Processed transcript: '{transcript}'")
         if not transcript:
             return jsonify({"error": "No transcript was generated. Please ensure the audio is clear and ffmpeg is installed."}), 500
@@ -232,7 +257,7 @@ def extract_symptoms():
         key_symptom = llm_handler.generate_text(
             "You are a caring doctor. Based on the following patient description, extract the key symptom in one short word or phrase.\n\n"
             f"Patient Description: {transcript}\n\n"
-            "Answer:", 
+            "Answer:",
             max_new_tokens=20, num_beams=3, temperature=0.7, repetition_penalty=1.2
         )
         if "Answer:" in key_symptom:
@@ -244,12 +269,25 @@ def extract_symptoms():
     logger.info(f"Extracted key symptom (internal): '{key_symptom}'")
     return jsonify({"key_symptom": key_symptom})
 
+@app.route("/generate_followup_questions", methods=["POST"])
+def generate_followup_questions_endpoint():
+    data = request.get_json()
+    if not data or not all(k in data for k in ["transcript", "key_symptom"]):
+        return jsonify({"error": "Missing required fields. Please provide transcript and key_symptom."}), 400
+    transcript = data["transcript"].strip()
+    key_symptom = data["key_symptom"].strip()
+    try:
+        questions = llm_handler.generate_followup_questions(transcript, key_symptom)
+    except Exception as e:
+        logger.error("Dynamic follow-up question generation error", exc_info=True)
+        return jsonify({"error": f"Dynamic follow-up question generation error: {str(e)}"}), 500
+    return jsonify({"follow_up_questions": questions})
+
 @app.route("/generate_guidelines", methods=["POST"])
 def generate_guidelines():
     data = request.get_json()
     if not data or not all(k in data for k in ["transcript", "key_symptom", "follow_up"]):
         return jsonify({"error": "Missing required fields. Please provide transcript, key_symptom, and follow_up."}), 400
-
     transcript = data["transcript"].strip()
     key_symptom = data["key_symptom"].strip()
     follow_up = data["follow_up"]
@@ -265,8 +303,6 @@ def generate_guidelines():
         return jsonify({"error": f"Guideline generation error: {str(e)}"}), 500
 
     logger.info(f"Generated guidelines: '{guidelines_text}'")
-    
-    # Convert the guidelines text to speech using gTTS.
     try:
         tts = gTTS(text=guidelines_text, lang='en')
         audio_io = io.BytesIO()
@@ -277,7 +313,6 @@ def generate_guidelines():
     except Exception as e:
         logger.error("TTS conversion error", exc_info=True)
         audio_data_url = ""
-
     return jsonify({"guidelines": guidelines_text, "audio": audio_data_url})
 
 if __name__ == "__main__":
