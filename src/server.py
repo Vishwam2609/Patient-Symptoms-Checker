@@ -128,84 +128,129 @@ class LLMHandler:
             logger.error("LLM generation error", exc_info=True)
             return ""
 
-    def generate_guidelines(self, transcript: str, key_symptom: str, follow_up: list) -> str:
+    def generate_guidelines(self, reviewed_transcript: str, key_symptom: str, static_followup: list, dynamic_followup: list) -> str:
         """
-        Generates concise, patient-friendly home care guidelines using the full conversation context.
+        Generates a concise, patient-friendly home care plan in one paragraph of approximately 150 words.
+        The guidelines consider the patient's reviewed transcript, extracted key symptom, static follow-up Q&A,
+        and dynamic follow-up Q&A. The plan focuses on specific home care strategies the patient can follow
+        to get relief from the reported symptom.
         """
-        follow_up_text = "\n".join(
-            [f"Q: {item['question']}\nA: {item['answer']}" for item in follow_up]
+        static_followup_text = "\n".join(
+            [f"Q: {item['question']}\nA: {item['answer']}" for item in static_followup]
         )
+        dynamic_followup_text = "\n".join(
+            [f"Q: {item['question']}\nA: {item['answer']}" for item in dynamic_followup]
+        )
+        
         detailed_context = (
             "Conversation so far:\n"
-            f"Patient's description: {transcript}\n"
+            f"Patient's description: {reviewed_transcript}\n"
             f"Key symptom: {key_symptom}\n"
-            f"Follow-up Q&A:\n{follow_up_text}\n"
+            "Static Follow-up Q&A:\n" + (static_followup_text or "None") + "\n"
+            "Dynamic Follow-up Q&A:\n" + (dynamic_followup_text or "None") + "\n"
         )
-
+        
         prompt = (
             "You are a caring doctor speaking directly to a patient with limited medical knowledge. "
-            "Based on the conversation below, please provide a Personalized Home Care Plan. "
-            "Ensure that your advice is clear, actionable, and written in plain language so the patient can easily follow it at home. "
-            "Respond in one complete, concise paragraph, as if you are continuing your conversation with the patient.\n\n"
+            "Based solely on the conversation below, please provide a complete and concise Personalized Home Care Plan in one paragraph. "
+            "Focus on specific home care strategies the patient can follow to get relief from the reported symptom. "
+            "Ensure that your answer is to the point, covers all essential aspects, and is written in plain language. "
+            "Your answer should be approximately 150 words.\n\n"
             f"{detailed_context}\n\n"
             "Your Personalized Home Care Plan:"
         )
+        
+        result = self.generate_text(
+            prompt,
+            max_new_tokens=500,
+            num_beams=5,
+            temperature=0.5,
+            repetition_penalty=1.0,
+            early_stopping=True
+        )
+        if "Your Personalized Home Care Plan:" in result:
+            result = result.split("Your Personalized Home Care Plan:")[-1].strip()
+        
+        # Remove extra whitespace and split into words.
+        paragraph = " ".join(result.split())
+        words = paragraph.split()
+        
+        # Post-process to target approximately 150 words.
+        if len(words) < 150:
+            while len(words) < 150:
+                words.append(words[-1])
+        elif len(words) > 150:
+            words = words[:150]
+        
+        final_paragraph = " ".join(words)
+        if final_paragraph[-1] not in ".!?":
+            final_paragraph += "."
+        
+        import re
+        # Remove enumeration prefixes like "1. ", "2. ", etc.
+        final_paragraph = re.sub(r"^\d+\.\s+", "", final_paragraph)
+        final_paragraph = re.sub(r"(\s)\d+\.\s+", r"\1", final_paragraph)
+        # Remove bolded section headings e.g., "**Nausea Management**:".
+        final_paragraph = re.sub(r"\*\*.*?\*\*\s*:\s*", "", final_paragraph)
+        
+        # Insert a newline after each sentence (after each period followed by whitespace).
+        final_paragraph = re.sub(r"\.\s+", ".\n", final_paragraph)
+        
+        return final_paragraph
 
-        for _ in range(10):
-            result = self.generate_text(
-                prompt,
-                max_new_tokens=300,
-                num_beams=5,
-                temperature=0.5,
-                repetition_penalty=1.0,
-                early_stopping=True
-            )
-            if "Your Personalized Home Care Plan:" in result:
-                result = result.split("Your Personalized Home Care Plan:")[-1].strip()
-            paragraph = " ".join(result.split())
-            words = paragraph.split()
-            if len(words) >= 30:
-                if paragraph[-1] not in ".!?":
-                    paragraph += "."
-                return paragraph
-
-        return "No valid guidelines generated."
-
-    import re
-
-    def generate_followup_questions(self, transcript: str, key_symptom: str) -> list:
+    def generate_followup_questions(self, reviewed_transcript: str, key_symptom: str, static_followup: list) -> list:
         """
-        Dynamically generates exactly three concise follow-up questions that help gather additional details 
-        about the patient's condition (duration, triggers, severity, daily impact) without repeating static questions.
-        The questions are written in plain, friendly language, and each ends with a question mark.
-        Output exactly three questions, one per line, with no extra commentary or numbering.
+        Dynamically generates exactly three additional follow-up questions based on the patient's reviewed transcript,
+        the extracted key symptom, and the static follow-up Q&A.
+        The questions must be medically relevant, clear, and specific inquiries that request additional details
+        about the patient's condition. They must be stand-alone, written in plain language, and should not include
+        any greetings, sign-offs, commentary, or extraneous text.
+        Output exactly three questions, one per line, each ending with a question mark.
         """
-        context = f"Patient's description: {transcript}\nKey symptom: {key_symptom}\n"
+        # Count the number of static Q&A items (without including their content)
+        static_count = len(static_followup)
+        
+        # Construct context using the reviewed transcript.
+        context = (
+            f"Patient's description: {reviewed_transcript}\n"
+            f"Key symptom: {key_symptom}\n"
+            f"Note: There are {static_count} static follow-up Q&A items provided separately. "
+            "Do not reference these items. Ensure that each follow-up question is medically relevant, meaningful, and contains sufficient detail (at least four words). "
+            "Avoid generic or ambiguous questions such as a mere list of interrogative words.\n"
+        )
+        
         prompt = (
-            "You are a caring doctor having a conversation with a patient. Based on the context below, generate exactly three follow-up questions "
-            "that will help gather additional details about the patient's condition such as the duration, triggers, severity, and impact on daily life. "
-            "Ensure the questions are friendly, written in plain language, and do not repeat any questions that might be covered by static follow-up questions. "
-            "Output only the three questions, one per line, with no extra commentary, and each must end with a question mark.\n\n"
+            "You are a caring doctor asking follow-up questions to better understand a patient's condition. "
+            "Based solely on the context below, generate exactly three stand-alone follow-up questions that are medically relevant, detailed, and specific. "
+            "Each question must be a clear inquiry asking for additional details about the patient's condition. "
+            "Do not include any greetings, farewells, commentary, or extraneous phrases. "
+            "Each question should start with an interrogative word or auxiliary verb (e.g., What, How, Do, Does, Could) and must end with a question mark. "
+            "Ensure that each question is meaningful and contains at least four words. "
+            "Do not echo any labels or context information. Output only the three questions, one per line, with no extra text.\n\n"
             f"Context:\n{context}\n"
             "### OUTPUT:\n"
         )
-        result = self.generate_text(prompt, max_new_tokens=100, num_beams=3, temperature=0.7, repetition_penalty=1.2)
         
-        # Extract only the part after the delimiter.
+        result = self.generate_text(prompt, max_new_tokens=50, num_beams=3, temperature=0.7, repetition_penalty=1.2)
+        
         if "### OUTPUT:" in result:
             result = result.split("### OUTPUT:")[-1].strip()
         
-        # Split into lines and filter out empty ones.
         questions = [line.strip() for line in result.split("\n") if line.strip()]
         
-        # Remove any leading numbering or bullets.
-        questions = [re.sub(r'^[\d\.\-\s]+', '', q) for q in questions]
+        import re
+        cleaned_questions = []
+        for q in questions:
+            q = re.sub(r'^Dynamic Follow-Up\s*\(\s*\d+\s+of\s+\d+\s*\)\s*', '', q)
+            q = re.sub(r'^[\d\.\-\)\s]+', '', q)
+            cleaned_questions.append(q)
         
-        # Ensure each question ends with a question mark.
-        questions = [q if q.endswith('?') else q + '?' for q in questions]
+        cleaned_questions = [q if q.endswith('?') else q + '?' for q in cleaned_questions]
         
-        # Return exactly three questions.
-        return questions[:3]
+        interrogative_pattern = re.compile(r"^(?:\s*(what|how|do|does|could)[\s,]*)+\?$", re.IGNORECASE)
+        valid_questions = [q for q in cleaned_questions if len(q.split()) >= 4 and not interrogative_pattern.fullmatch(q)]
+        
+        return valid_questions[:3]
 
 llm_handler = LLMHandler()
 
@@ -269,15 +314,19 @@ def extract_symptoms():
     logger.info(f"Extracted key symptom (internal): '{key_symptom}'")
     return jsonify({"key_symptom": key_symptom})
 
+# Updated endpoint to expect 'reviewed_transcript'
 @app.route("/generate_followup_questions", methods=["POST"])
 def generate_followup_questions_endpoint():
     data = request.get_json()
-    if not data or not all(k in data for k in ["transcript", "key_symptom"]):
-        return jsonify({"error": "Missing required fields. Please provide transcript and key_symptom."}), 400
-    transcript = data["transcript"].strip()
+    if not data or not all(k in data for k in ["reviewed_transcript", "key_symptom"]):
+        return jsonify({"error": "Missing required fields. Please provide reviewed_transcript and key_symptom."}), 400
+    
+    reviewed_transcript = data["reviewed_transcript"].strip()
     key_symptom = data["key_symptom"].strip()
+    static_followup = data.get("static_followup", [])
+    
     try:
-        questions = llm_handler.generate_followup_questions(transcript, key_symptom)
+        questions = llm_handler.generate_followup_questions(reviewed_transcript, key_symptom, static_followup)
     except Exception as e:
         logger.error("Dynamic follow-up question generation error", exc_info=True)
         return jsonify({"error": f"Dynamic follow-up question generation error: {str(e)}"}), 500
@@ -286,18 +335,29 @@ def generate_followup_questions_endpoint():
 @app.route("/generate_guidelines", methods=["POST"])
 def generate_guidelines():
     data = request.get_json()
-    if not data or not all(k in data for k in ["transcript", "key_symptom", "follow_up"]):
-        return jsonify({"error": "Missing required fields. Please provide transcript, key_symptom, and follow_up."}), 400
-    transcript = data["transcript"].strip()
-    key_symptom = data["key_symptom"].strip()
-    follow_up = data["follow_up"]
-    for item in follow_up:
+    if not data or not all(k in data for k in ["transcript", "key_symptom"]):
+        return jsonify({"error": "Missing required fields. Please provide transcript and key_symptom."}), 400
+
+    transcript = data.get("transcript", "").strip()
+    key_symptom = data.get("key_symptom", "").strip()
+    # Use empty lists if follow_up or dynamic_followup are not provided.
+    static_followup = data.get("follow_up", [])
+    dynamic_followup = data.get("dynamic_followup", [])
+
+    # (Optional: Validate that transcript and key_symptom are not empty.)
+    if not transcript or not key_symptom:
+        return jsonify({"error": "Transcript and key_symptom cannot be empty."}), 400
+
+    for item in static_followup:
         if not item.get("answer", "").strip():
-            return jsonify({"error": "All follow-up questions must be answered."}), 400
+            return jsonify({"error": "All static follow-up questions must be answered."}), 400
+    for item in dynamic_followup:
+        if not item.get("answer", "").strip():
+            return jsonify({"error": "All dynamic follow-up questions must be answered."}), 400
 
     try:
         llm_handler.load_model()
-        guidelines_text = llm_handler.generate_guidelines(transcript, key_symptom, follow_up)
+        guidelines_text = llm_handler.generate_guidelines(transcript, key_symptom, static_followup, dynamic_followup)
     except Exception as e:
         logger.error("Guideline generation error", exc_info=True)
         return jsonify({"error": f"Guideline generation error: {str(e)}"}), 500
@@ -313,6 +373,7 @@ def generate_guidelines():
     except Exception as e:
         logger.error("TTS conversion error", exc_info=True)
         audio_data_url = ""
+
     return jsonify({"guidelines": guidelines_text, "audio": audio_data_url})
 
 if __name__ == "__main__":

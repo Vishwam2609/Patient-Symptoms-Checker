@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { AudioRecorder } from './components/AudioRecorder';
 import { Button } from './components/ui/button';
-import { Mic } from 'lucide-react';
+import { Mic, Loader2 } from 'lucide-react';
 
 const API_BASE_URL = 'https://8341-100-27-249-117.ngrok-free.app';
 
-// Static follow-up questions mapping (keys: "fever", "coughing", "headache", "backpain", "toothache")
+// Static follow-up questions mapping.
 const staticFollowUpQuestionsMapping: { [key: string]: string[] } = {
   fever: [
     "Dear patient, when did you first notice your fever, and has your temperature been consistently high or fluctuating?",
@@ -37,7 +37,6 @@ const staticFollowUpQuestionsMapping: { [key: string]: string[] } = {
 /* ---------------- Speech Synthesis Tone Helper ---------------- */
 const createUtterance = (text: string): SpeechSynthesisUtterance => {
   const utterance = new SpeechSynthesisUtterance(text);
-  // Use a consistent, friendly tone.
   utterance.rate = 0.9;
   utterance.pitch = 1.0;
   utterance.volume = 1.0;
@@ -78,11 +77,15 @@ async function extractSymptoms(transcript: string): Promise<string> {
   return data.key_symptom;
 }
 
-async function generateFollowupQuestions(transcript: string, key_symptom: string): Promise<string[]> {
+async function generateFollowupQuestions(
+  reviewed_transcript: string,
+  key_symptom: string,
+  static_followup: any[]
+): Promise<string[]> {
   const response = await fetch(`${API_BASE_URL}/generate_followup_questions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transcript, key_symptom }),
+    body: JSON.stringify({ reviewed_transcript, key_symptom, static_followup }),
   });
   if (!response.ok) {
     const errorData = await response.json();
@@ -98,7 +101,6 @@ async function generateGuidelines(
   static_followup: { question: string; answer: string }[],
   dynamic_followup: { question: string; answer: string }[]
 ): Promise<{ guidelines: string; audio: string }> {
-  // Combine both static and dynamic Q&A.
   const allFollowUp = [...static_followup, ...dynamic_followup];
   const followUpText = allFollowUp.map(item => `Q: ${item.question}\nA: ${item.answer}`).join("\n");
   const detailed_context = (
@@ -120,10 +122,30 @@ async function generateGuidelines(
   return { guidelines: data.guidelines, audio: data.audio };
 }
 
+/* ---------------- Loading Indicator Component ---------------- */
+const LoadingIndicator = ({ message }: { message: string }) => (
+  <div className="flex flex-col items-center justify-center h-full">
+    <h2 className="text-3xl font-semibold text-gray-900">{message}</h2>
+    <div className="flex flex-col items-center justify-center space-y-2 mt-4">
+      <Loader2 className="animate-spin w-8 h-8 text-blue-600" />
+      <p className="text-lg text-gray-600">Processing, please wait...</p>
+    </div>
+  </div>
+);
+
 /* ---------------- Main App Component ---------------- */
+type AppStep =
+  | 'initial'
+  | 'recording'
+  | 'review'
+  | 'followupLoading'
+  | 'followup'
+  | 'dynamicFollowupLoading'
+  | 'dynamicFollowup'
+  | 'final';
+
 function App() {
-  // Define the steps: 'initial', 'recording', 'review', 'followup' (static), 'dynamicFollowup', 'final'
-  const [step, setStep] = useState<'initial' | 'recording' | 'review' | 'followup' | 'dynamicFollowup' | 'final'>('initial');
+  const [step, setStep] = useState<AppStep>('initial');
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [editedTranscript, setEditedTranscript] = useState<string>('');
@@ -140,7 +162,7 @@ function App() {
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [welcomeSpoken, setWelcomeSpoken] = useState(false);
 
-  // Generalized error speech: speak message and redirect.
+  /* ----------- Error Handling & Speech ----------- */
   const speakErrorAndRedirect = (msg: string) => {
     speechSynthesis.cancel();
     const utterance = createUtterance(`Dear patient, ${msg}`);
@@ -158,7 +180,6 @@ function App() {
     setWelcomeSpoken(true);
   };
 
-  // Overlay handling.
   const handleOverlayClick = () => {
     if (!welcomeSpoken) {
       speakWelcome();
@@ -178,6 +199,7 @@ function App() {
     }
   }, [audioUrl]);
 
+  /* ----------- Recording & Transcription ----------- */
   const handleRecordingComplete = async (blob: Blob) => {
     setRecordedBlob(blob);
     const utterance = createUtterance("Dear patient, your recording has been stopped. We are now processing your message. Please wait a moment.");
@@ -195,7 +217,6 @@ function App() {
     setLoading(false);
   };
 
-  // Speak review instructions.
   useEffect(() => {
     if (step === 'review') {
       speechSynthesis.cancel();
@@ -204,39 +225,48 @@ function App() {
     }
   }, [step]);
 
-  // Handle static follow-up questions.
+  /* ----------- Extract Symptom & Transition ----------- */
   const handleExtractSymptoms = async () => {
     if (!editedTranscript) return;
+    // Immediately transition to the appropriate transitional state.
+    // We'll assume static follow-up is the default transitional state.
+    setStep('followupLoading');
     setLoading(true);
     try {
       const symptom = await extractSymptoms(editedTranscript);
-      // Use only the first line and clean up the symptom.
       const firstLine = symptom.split('\n')[0];
       const cleanedSymptom = firstLine.toLowerCase().trim().replace(/[^a-z]/g, "");
       setExtractedSymptom(cleanedSymptom);
-      // Check for static questions for this symptom.
-      if (staticFollowUpQuestionsMapping[cleanedSymptom]) {
-        const questions = staticFollowUpQuestionsMapping[cleanedSymptom];
-        setStaticFollowUpQuestions(questions);
-        setStaticFollowUpAnswers(Array(questions.length).fill(""));
-        setCurrentStaticIndex(0);
-        setStep('followup');
-      } else {
-        // If no static questions are available, generate dynamic follow-up directly.
-        const questions = await generateFollowupQuestions(editedTranscript, cleanedSymptom);
-        setDynamicFollowUpQuestions(questions);
-        setDynamicFollowUpAnswers(Array(questions.length).fill(""));
-        setCurrentDynamicIndex(0);
-        setStep('dynamicFollowup');
+      // If static follow-up questions exist for the symptom, remain in followupLoading.
+      // Otherwise, transition to dynamic follow-up loading.
+      if (!staticFollowUpQuestionsMapping[cleanedSymptom]) {
+        setStep('dynamicFollowupLoading');
       }
     } catch (error: any) {
       console.error("Symptom extraction error:", error);
       speakErrorAndRedirect("we had trouble understanding your symptoms. Please try again.");
     }
     setLoading(false);
-  };
+  };  
 
-  // Speak each static follow-up question.
+  /* ----------- Transitional Step: Follow-Up Loading (Static) ----------- */
+  useEffect(() => {
+    if (step === 'followupLoading') {
+      speechSynthesis.cancel();
+      const utterance = createUtterance("Dear patient, we are asking your follow-up questions. Please wait a moment.");
+      speechSynthesis.speak(utterance);
+
+      setTimeout(() => {
+        const questions = staticFollowUpQuestionsMapping[extractedSymptom];
+        setStaticFollowUpQuestions(questions);
+        setStaticFollowUpAnswers(Array(questions.length).fill(""));
+        setCurrentStaticIndex(0);
+        setStep('followup');
+      }, 500);
+    }
+  }, [step, extractedSymptom]);
+
+  /* ----------- Static Follow-Up ----------- */
   useEffect(() => {
     if (step === 'followup' && staticFollowUpQuestions.length > 0) {
       speechSynthesis.cancel();
@@ -254,27 +284,39 @@ function App() {
     if (currentStaticIndex + 1 < staticFollowUpQuestions.length) {
       setCurrentStaticIndex(currentStaticIndex + 1);
     } else {
-      // After static follow-up, generate dynamic follow-up questions.
+      setStep('dynamicFollowupLoading');
+    }
+  };
+
+  /* ----------- Transitional Step: Dynamic Follow-Up Loading ----------- */
+  useEffect(() => {
+    if (step === 'dynamicFollowupLoading') {
+      speechSynthesis.cancel();
+      const utterance = createUtterance("Dear patient, we are generating additional follow-up questions. Please wait a moment.");
+      speechSynthesis.speak(utterance);
+      setLoading(true);
+      // For example, in your dynamic follow-up loading effect:
       (async () => {
-        setLoading(true);
         try {
-          const questions = await generateFollowupQuestions(editedTranscript, extractedSymptom);
+          const staticQA = staticFollowUpQuestions.map((q, i) => ({
+            question: q,
+            answer: staticFollowUpAnswers[i] || ""
+          }));
+          // Pass editedTranscript (the reviewed, finalized transcript) as reviewed_transcript.
+          const questions = await generateFollowupQuestions(editedTranscript, extractedSymptom, staticQA);
           setDynamicFollowUpQuestions(questions);
           setDynamicFollowUpAnswers(Array(questions.length).fill(""));
           setCurrentDynamicIndex(0);
-          const utterance = createUtterance(`Dear patient, ${questions[0]}`);
-          speechSynthesis.speak(utterance);
           setStep('dynamicFollowup');
         } catch (error: any) {
           console.error("Dynamic follow-up generation error:", error);
           speakErrorAndRedirect("we couldn't generate additional follow-up questions. Please try again.");
         }
-        setLoading(false);
       })();
     }
-  };
+  }, [step, transcript, extractedSymptom, staticFollowUpQuestions, staticFollowUpAnswers]);
 
-  // Speak each dynamic follow-up question.
+  /* ----------- Dynamic Follow-Up ----------- */
   useEffect(() => {
     if (step === 'dynamicFollowup' && dynamicFollowUpQuestions.length > 0) {
       speechSynthesis.cancel();
@@ -296,16 +338,15 @@ function App() {
     }
   };
 
-  // Final step: speak final instructions and generate guidelines.
+  /* ----------- Final Guidelines ----------- */
   useEffect(() => {
     if (step === "final") {
       speechSynthesis.cancel();
       const utterance = createUtterance("Dear patient, your personalized home care plan is being generated. Please wait a moment.");
       speechSynthesis.speak(utterance);
+      setLoading(true);
       (async () => {
-        setLoading(true);
         try {
-          // Prepare Q&A data from static and dynamic phases.
           const staticQA = staticFollowUpQuestions.map((q, i) => ({
             question: q,
             answer: staticFollowUpAnswers[i] || ""
@@ -314,7 +355,7 @@ function App() {
             question: q,
             answer: dynamicFollowUpAnswers[i] || ""
           }));
-          const result = await generateGuidelines(editedTranscript, extractedSymptom, staticQA, dynamicQA);
+          const result = await generateGuidelines(transcript, extractedSymptom, staticQA, dynamicQA);
           setGuidelines(result.guidelines);
           setAudioUrl(result.audio);
         } catch (error: any) {
@@ -324,7 +365,7 @@ function App() {
         setLoading(false);
       })();
     }
-  }, [step, editedTranscript, extractedSymptom, staticFollowUpQuestions, staticFollowUpAnswers, dynamicFollowUpQuestions, dynamicFollowUpAnswers]);
+  }, [step, transcript, extractedSymptom, staticFollowUpQuestions, staticFollowUpAnswers, dynamicFollowUpQuestions, dynamicFollowUpAnswers]);
 
   return (
     <div className="min-h-screen relative flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-gray-100 py-8">
@@ -339,6 +380,7 @@ function App() {
           </div>
         </div>
       )}
+
       <div className="max-w-3xl w-full p-6 bg-white rounded-xl shadow-xl transition-all duration-500 ease-in-out">
         {step === 'initial' && (
           <div className="space-y-6 text-center">
@@ -351,18 +393,22 @@ function App() {
             <p className="text-lg text-gray-700">
               We're here to help you feel your best. Share your symptoms by speaking, and we'll guide you through home care.
             </p>
-            <Button onClick={handleStartRecording} className="px-6 py-3 mt-4 text-white bg-blue-600 rounded-lg shadow-xl hover:bg-blue-700 transition-colors">
+            <Button
+              onClick={handleStartRecording}
+              className="px-6 py-3 mt-4 text-white bg-blue-600 rounded-lg shadow-xl hover:bg-blue-700 transition-colors"
+            >
               <Mic className="w-5 h-5 mr-2" /> Start Recording
             </Button>
           </div>
         )}
+
         {step === 'recording' && (
           <div className="space-y-6 text-center">
-            <h2 className="text-3xl font-semibold text-gray-900">Recording...</h2>
             <AudioRecorder onRecordingComplete={handleRecordingComplete} autoStart={true} />
-            {loading && <p className="mt-4 text-gray-600">Listening...</p>}
+            {loading && <LoadingIndicator message="Recording..." />}
           </div>
         )}
+
         {step === 'review' && (
           <div className="space-y-6">
             <h2 className="text-2xl font-semibold text-gray-900">Review Your Message</h2>
@@ -373,11 +419,20 @@ function App() {
               value={editedTranscript}
               onChange={(e) => setEditedTranscript(e.target.value)}
             />
-            <Button onClick={handleExtractSymptoms} disabled={loading} className="px-6 py-3 mt-4 text-white bg-green-600 rounded-lg shadow-xl hover:bg-green-700 transition-colors">
+            <Button
+              onClick={handleExtractSymptoms}
+              disabled={loading}
+              className="px-6 py-3 mt-4 text-white bg-green-600 rounded-lg shadow-xl hover:bg-green-700 transition-colors"
+            >
               Proceed to Follow-Up
             </Button>
           </div>
         )}
+
+        {step === 'followupLoading' && (
+          <LoadingIndicator message="Asking Follow-Up Questions..." />
+        )}
+
         {step === 'followup' && staticFollowUpQuestions.length > 0 && (
           <div className="space-y-6">
             <h2 className="text-2xl font-semibold text-gray-900">
@@ -395,11 +450,19 @@ function App() {
                 setStaticFollowUpAnswers(newAnswers);
               }}
             />
-            <Button onClick={handleNextStaticFollowUp} className="px-6 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow-xl hover:bg-purple-700 transition-colors">
+            <Button
+              onClick={handleNextStaticFollowUp}
+              className="px-6 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow-xl hover:bg-purple-700 transition-colors"
+            >
               Next
             </Button>
           </div>
         )}
+
+        {step === 'dynamicFollowupLoading' && (
+          <LoadingIndicator message="Generating Follow-Up Questions..." />
+        )}
+
         {step === 'dynamicFollowup' && dynamicFollowUpQuestions.length > 0 && (
           <div className="space-y-6">
             <h2 className="text-2xl font-semibold text-gray-900">
@@ -417,16 +480,19 @@ function App() {
                 setDynamicFollowUpAnswers(newAnswers);
               }}
             />
-            <Button onClick={handleNextDynamicFollowUp} className="px-6 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow-xl hover:bg-purple-700 transition-colors">
+            <Button
+              onClick={handleNextDynamicFollowUp}
+              className="px-6 py-3 mt-4 text-white bg-purple-600 rounded-lg shadow-xl hover:bg-purple-700 transition-colors"
+            >
               Next
             </Button>
           </div>
         )}
+
         {step === 'final' && (
           <div className="space-y-6 text-center">
-            <h2 className="text-3xl font-bold text-gray-900">Your Personalized Home Care Plan</h2>
             {loading ? (
-              <p className="text-lg text-gray-600">Generating your care plan...</p>
+              <LoadingIndicator message="Generating Home Care Plan..." />
             ) : (
               <div className="p-4 bg-gray-50 rounded-md shadow-xl">
                 <pre className="text-lg text-gray-800 whitespace-pre-wrap">{guidelines}</pre>

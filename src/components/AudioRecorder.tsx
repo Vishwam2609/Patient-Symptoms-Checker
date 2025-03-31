@@ -10,7 +10,7 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
   const [recordingTime, setRecordingTime] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<number | null>(null);
 
   const startRecording = async () => {
     try {
@@ -30,9 +30,9 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
       };
       mediaRecorderRef.current.start();
       setIsRecording(true);
-      // Start a timer to display recording time.
-      timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
+      // Start recording timer.
+      timerRef.current = window.setInterval(() => {
+        setRecordingTime(prev => prev + 1);
       }, 1000);
     } catch (error) {
       console.error("Error accessing microphone:", error);
@@ -52,15 +52,18 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onRecordingComplet
       startRecording();
     }
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
     };
   }, [autoStart]);
 
   return (
     <div className="flex flex-col items-center">
       {isRecording && (
-        <div className="mb-4 text-red-600 font-semibold animate-pulse">
-          Recording... {recordingTime}s
+        <div className="mb-4 flex items-center space-x-2">
+          <span className="animate-pulse bg-red-500 rounded-full w-3 h-3"></span>
+          <span className="text-red-600 font-semibold">Recording... {recordingTime}s</span>
         </div>
       )}
       {isRecording ? (
